@@ -1,6 +1,6 @@
 # Sell Me a Sasquatch AI
 
-A Rust implementation of the *Sell Me a Sasquatch* card game rules, exposed
+A Rust implementation of the _Sell Me a Sasquatch_ card game rules, exposed
 to Python for training and evaluating a self-play reinforcement learning
 agent, with a small local web app for watching, playing against, or getting
 move advice from a trained model.
@@ -116,7 +116,7 @@ can be swapped if the physical rules say otherwise.
 
 ## Copyright and acceptable use
 
-*Sell Me a Sasquatch* is a copyrighted card game. This repository does not
+_Sell Me a Sasquatch_ is a copyrighted card game. This repository does not
 include any of the game's copyrighted artwork, card text, or rulebook, and
 is not affiliated with or endorsed by the game's publisher or designers.
 The code in this repository (the Rust engine, Python environment, and web

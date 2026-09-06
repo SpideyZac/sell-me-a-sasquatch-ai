@@ -1,99 +1,150 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sell Me a Sasquatch - AI</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-  <header>
-    <h1>Sell Me a Sasquatch - AI</h1>
-    <nav>
-      <button class="tab-btn active" data-tab="watch">Watch AIs</button>
-      <button class="tab-btn" data-tab="play">Play vs AIs</button>
-      <button class="tab-btn" data-tab="advisor">Live Game</button>
-    </nav>
-  </header>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Sell Me a Sasquatch - AI</title>
+        <link
+            rel="stylesheet"
+            href="{{ url_for('static', filename='style.css') }}"
+        />
+    </head>
+    <body>
+        <header>
+            <h1>Sell Me a Sasquatch - AI</h1>
+            <nav>
+                <button class="tab-btn active" data-tab="watch">
+                    Watch AIs
+                </button>
+                <button class="tab-btn" data-tab="play">Play vs AIs</button>
+                <button class="tab-btn" data-tab="advisor">Live Game</button>
+            </nav>
+        </header>
 
-  <section id="tab-watch" class="tab-panel active">
-    <div class="setup" id="watch-setup">
-      <label>Players
-        <select id="watch-num-players">
-          <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
-        </select>
-      </label>
-      <div id="watch-seat-models" class="seat-models"></div>
-      <label>Who goes first / buys first <select id="watch-first-player"></select></label>
-      <label>Seed (optional) <input type="number" id="watch-seed"></label>
-      <button id="watch-start">Start</button>
-    </div>
-    <div class="game-view" id="watch-view" hidden>
-      <div class="controls">
-        <button id="watch-step">Step</button>
-        <label><input type="checkbox" id="watch-autoplay"> Autoplay</label>
-        <button id="watch-new">New game</button>
-      </div>
-      <div class="status" id="watch-status"></div>
-      <div class="players" id="watch-players"></div>
-      <div class="deals" id="watch-deals"></div>
-      <div class="log" id="watch-log"></div>
-    </div>
-  </section>
+        <section id="tab-watch" class="tab-panel active">
+            <div class="setup" id="watch-setup">
+                <label
+                    >Players
+                    <select id="watch-num-players">
+                        <option>2</option>
+                        <option selected>4</option>
+                        <option>3</option>
+                        <option>5</option>
+                        <option>6</option>
+                    </select>
+                </label>
+                <div id="watch-seat-models" class="seat-models"></div>
+                <label
+                    >Who goes first / buys first
+                    <select id="watch-first-player"></select
+                ></label>
+                <label
+                    >Seed (optional) <input type="number" id="watch-seed"
+                /></label>
+                <button id="watch-start">Start</button>
+            </div>
+            <div class="game-view" id="watch-view" hidden>
+                <div class="controls">
+                    <button id="watch-step">Step</button>
+                    <label
+                        ><input type="checkbox" id="watch-autoplay" />
+                        Autoplay</label
+                    >
+                    <button id="watch-new">New game</button>
+                </div>
+                <div class="status" id="watch-status"></div>
+                <div class="players" id="watch-players"></div>
+                <div class="deals" id="watch-deals"></div>
+                <div class="log" id="watch-log"></div>
+            </div>
+        </section>
 
-  <section id="tab-play" class="tab-panel">
-    <div class="setup" id="play-setup">
-      <label>Players
-        <select id="play-num-players">
-          <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
-        </select>
-      </label>
-      <label>Your seat <select id="play-human-seat"></select></label>
-      <div id="play-seat-models" class="seat-models"></div>
-      <label>Who goes first / buys first <select id="play-first-player"></select></label>
-      <label>Seed (optional) <input type="number" id="play-seed"></label>
-      <button id="play-start">Start</button>
-    </div>
-    <div class="game-view" id="play-view" hidden>
-      <button id="play-new">New game</button>
-      <div class="status" id="play-status"></div>
-      <div class="hand" id="play-hand"></div>
-      <div class="players" id="play-players"></div>
-      <div class="deals" id="play-deals"></div>
-      <div class="actions" id="play-actions"></div>
-      <div class="log" id="play-log"></div>
-    </div>
-  </section>
+        <section id="tab-play" class="tab-panel">
+            <div class="setup" id="play-setup">
+                <label
+                    >Players
+                    <select id="play-num-players">
+                        <option>2</option>
+                        <option selected>4</option>
+                        <option>3</option>
+                        <option>5</option>
+                        <option>6</option>
+                    </select>
+                </label>
+                <label
+                    >Your seat
+                    <select id="play-human-seat"></select
+                ></label>
+                <div id="play-seat-models" class="seat-models"></div>
+                <label
+                    >Who goes first / buys first
+                    <select id="play-first-player"></select
+                ></label>
+                <label
+                    >Seed (optional) <input type="number" id="play-seed"
+                /></label>
+                <button id="play-start">Start</button>
+            </div>
+            <div class="game-view" id="play-view" hidden>
+                <button id="play-new">New game</button>
+                <div class="status" id="play-status"></div>
+                <div class="hand" id="play-hand"></div>
+                <div class="players" id="play-players"></div>
+                <div class="deals" id="play-deals"></div>
+                <div class="actions" id="play-actions"></div>
+                <div class="log" id="play-log"></div>
+            </div>
+        </section>
 
-  <section id="tab-advisor" class="tab-panel">
-    <p class="disclaimer">For an actual live (physical) game. It's still the real rules engine underneath - so
-      collections, point totals, discard/draw piles, and set trade-ins are all handled for you automatically and
-      correctly - but nothing is dealt randomly. You just enter each card's real identity exactly when it becomes
-      visible at the table (your starting hand, then anything as it's revealed); the advisor ranks your own
-      decisions along the way.</p>
-    <div class="setup" id="advisor-setup">
-      <label>Players
-        <select id="advisor-num-players">
-          <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
-        </select>
-      </label>
-      <label>Your seat <select id="advisor-human-seat"></select></label>
-      <label>Who goes first / buys first <select id="advisor-first-player"></select></label>
-      <label>Advisor model <select id="advisor-model"></select></label>
-      <label>Seed (optional) <input type="number" id="advisor-seed"></label>
-      <button id="advisor-start">Start</button>
-    </div>
-    <div class="game-view" id="advisor-view" hidden>
-      <button id="advisor-new">New game</button>
-      <div class="status" id="advisor-status"></div>
-      <div class="hand" id="advisor-hand"></div>
-      <div class="players" id="advisor-players"></div>
-      <div class="deals" id="advisor-deals"></div>
-      <div class="prompt" id="advisor-prompt"></div>
-      <div class="log" id="advisor-log"></div>
-    </div>
-  </section>
+        <section id="tab-advisor" class="tab-panel">
+            <p class="disclaimer">
+                For an actual live (physical) game. It's still the real rules
+                engine underneath - so collections, point totals, discard/draw
+                piles, and set trade-ins are all handled for you automatically
+                and correctly - but nothing is dealt randomly. You just enter
+                each card's real identity exactly when it becomes visible at the
+                table (your starting hand, then anything as it's revealed); the
+                advisor ranks your own decisions along the way.
+            </p>
+            <div class="setup" id="advisor-setup">
+                <label
+                    >Players
+                    <select id="advisor-num-players">
+                        <option>2</option>
+                        <option selected>4</option>
+                        <option>3</option>
+                        <option>5</option>
+                        <option>6</option>
+                    </select>
+                </label>
+                <label
+                    >Your seat
+                    <select id="advisor-human-seat"></select
+                ></label>
+                <label
+                    >Who goes first / buys first
+                    <select id="advisor-first-player"></select
+                ></label>
+                <label
+                    >Advisor model
+                    <select id="advisor-model"></select
+                ></label>
+                <label
+                    >Seed (optional) <input type="number" id="advisor-seed"
+                /></label>
+                <button id="advisor-start">Start</button>
+            </div>
+            <div class="game-view" id="advisor-view" hidden>
+                <button id="advisor-new">New game</button>
+                <div class="status" id="advisor-status"></div>
+                <div class="hand" id="advisor-hand"></div>
+                <div class="players" id="advisor-players"></div>
+                <div class="deals" id="advisor-deals"></div>
+                <div class="prompt" id="advisor-prompt"></div>
+                <div class="log" id="advisor-log"></div>
+            </div>
+        </section>
 
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
-</body>
+        <script src="{{ url_for('static', filename='app.js') }}"></script>
+    </body>
 </html>
