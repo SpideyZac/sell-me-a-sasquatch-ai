@@ -24,6 +24,7 @@ Then open http://127.0.0.1:5000/
 from __future__ import annotations
 
 import random
+import time
 import uuid
 
 from flask import Flask, abort, jsonify, render_template, request  # type: ignore
@@ -41,6 +42,27 @@ GAMES: dict[str, "GameSession"] = {}
 """Live watch/play sessions, keyed by their generated id."""
 LIVE_GAMES: dict[str, LiveSession] = {}
 """Live tracker sessions, keyed by their generated id."""
+SESSION_TTL_SECONDS = 2 * 60 * 60
+"""A session with no activity for this long is treated as abandoned and
+dropped the next time any session is touched."""
+LAST_ACTIVE: dict[str, float] = {}
+"""Last-touched time for every id in either GAMES or LIVE_GAMES, shared
+since ids are generated from the same uuid4 space and never collide."""
+
+
+def _touch(session_id: str) -> None:
+    """Marks a session as just-used, resetting its expiry clock."""
+    LAST_ACTIVE[session_id] = time.time()
+
+
+def _purge_expired() -> None:
+    """Drops any game/live session that's gone untouched past the TTL."""
+    cutoff = time.time() - SESSION_TTL_SECONDS
+    expired = [sid for sid, t in LAST_ACTIVE.items() if t < cutoff]
+    for sid in expired:
+        GAMES.pop(sid, None)
+        LIVE_GAMES.pop(sid, None)
+        LAST_ACTIVE.pop(sid, None)
 
 
 # game sessions (watch/play, real GameState, AI/random-controlled seats)
@@ -182,18 +204,24 @@ def _view_for(session: GameSession) -> dict:
 
 
 def _get_session(game_id: str) -> GameSession:
-    """Looks up a watch/play session, aborting with 404 if it doesn't exist."""
+    """Looks up a watch/play session, aborting with 404 if it doesn't
+    exist or has expired from inactivity."""
+    _purge_expired()
     session = GAMES.get(game_id)
     if session is None:
         abort(404, "unknown game_id")
+    _touch(game_id)
     return session  # type: ignore
 
 
 def _get_live_session(live_id: str) -> LiveSession:
-    """Looks up a live tracker session, aborting with 404 if it doesn't exist."""
+    """Looks up a live tracker session, aborting with 404 if it doesn't
+    exist or has expired from inactivity."""
+    _purge_expired()
     session = LIVE_GAMES.get(live_id)
     if session is None:
         abort(404, "unknown live_id")
+    _touch(live_id)
     return session  # type: ignore
 
 
@@ -268,11 +296,13 @@ def api_new_game():
                     400,
                 )
 
+    _purge_expired()
     game_id = uuid.uuid4().hex[:12]
     session = GameSession(
         game, num_players, mode, human_seat, seat_specs, seat_policies
     )
     GAMES[game_id] = session
+    _touch(game_id)
 
     if mode == "play":
         _auto_resolve_ai_turns(session)
@@ -330,6 +360,7 @@ def api_act(game_id):
 def api_delete_game(game_id):
     """Discards a watch/play game session."""
     GAMES.pop(game_id, None)
+    LAST_ACTIVE.pop(game_id, None)
     return jsonify({"ok": True})
 
 
@@ -370,8 +401,10 @@ def api_new_live_game():
     ) as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001 - surface engine/model setup errors to the UI as-is
         return jsonify({"error": str(e)}), 400
 
+    _purge_expired()
     live_id = uuid.uuid4().hex[:12]
     LIVE_GAMES[live_id] = session
+    _touch(live_id)
     return jsonify({"live_id": live_id, "state": session.state()})
 
 
@@ -397,6 +430,7 @@ def api_live_respond(live_id):
 def api_delete_live_game(live_id):
     """Discards a live tracker session."""
     LIVE_GAMES.pop(live_id, None)
+    LAST_ACTIVE.pop(live_id, None)
     return jsonify({"ok": True})
 
 

@@ -155,6 +155,8 @@ function initWatch() {
     document.getElementById("watch-new").addEventListener("click", () => {
         clearInterval(watchAutoplayTimer);
         document.getElementById("watch-autoplay").checked = false;
+        if (watchGameId)
+            fetch(`/api/games/${watchGameId}`, { method: "DELETE" });
         watchGameId = null;
         document.getElementById("watch-setup").hidden = false;
         document.getElementById("watch-view").hidden = true;
@@ -256,6 +258,7 @@ function initPlay() {
         });
 
     document.getElementById("play-new").addEventListener("click", () => {
+        if (playGameId) fetch(`/api/games/${playGameId}`, { method: "DELETE" });
         playGameId = null;
         document.getElementById("play-setup").hidden = false;
         document.getElementById("play-view").hidden = true;
@@ -386,6 +389,7 @@ function initAdvisor() {
         });
 
     document.getElementById("advisor-new").addEventListener("click", () => {
+        if (liveGameId) fetch(`/api/live/${liveGameId}`, { method: "DELETE" });
         liveGameId = null;
         document.getElementById("advisor-setup").hidden = false;
         document.getElementById("advisor-view").hidden = true;
