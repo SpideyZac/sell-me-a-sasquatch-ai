@@ -6,7 +6,11 @@
 - Advisor: same as Play (a real `GameState` session, so hands, collections,
   deals, and draw/discard pile state are all tracked exactly), except your
   own legal actions are additionally ranked by a model so you can see what
-  it would recommend before you pick.
+  it would recommend before you pick. Any other seat can be set to "manual"
+  instead of an AI/random policy - useful for tracking a live physical game,
+  where you enter each such seat's real moves (e.g. which 3 cards they
+  offered, then which one they reveal) as they happen instead of an AI
+  guessing.
 
 Run with:
     cd python
@@ -87,6 +91,7 @@ class GameSession:
         seat_specs: list[str],
         seat_policies: list,
         advisor_model_spec: "str | None" = None,
+        manual_seats: "set[int] | None" = None,
     ):
         self.game = game
         self.num_players = num_players
@@ -95,6 +100,10 @@ class GameSession:
         self.seat_specs = seat_specs
         self.seat_policies = seat_policies
         self.advisor_model_spec = advisor_model_spec  # "advisor" mode only
+        # Seats with no policy: your own seat, plus any seat_spec == "manual"
+        # ("manual" lets you enter what that seat actually did move-by-move -
+        # e.g. tracking a live physical game - instead of an AI/random policy).
+        self.manual_seats = manual_seats or set()
         self.log: list[str] = []
 
 
@@ -176,7 +185,7 @@ def _auto_resolve_ai_turns(session: GameSession, max_steps: int = 1000) -> None:
         if game.is_game_over():
             return
         active = game.active_players()[0]
-        if session.mode in ("play", "advisor") and active == session.human_seat:
+        if active in session.manual_seats:
             return
         _step_seat(session, active)
 
@@ -212,21 +221,33 @@ def spectator_view(session: GameSession) -> dict:
 
 
 def human_view(session: GameSession) -> dict:
+    """Built around `session.human_seat` (your permanent hand/collections
+    panel), plus whichever seat currently needs manual input - that's always
+    you, except when another seat's spec is "manual" and it's their turn."""
     game = session.game
     seat = session.human_seat
     obs = game.observation(seat)
-    your_turn = (not game.is_game_over()) and game.active_players() == [seat]
-    legal = game.legal_actions(seat) if your_turn else []
-    legal_actions = [{"index": i, "label": describe_action(game, a)} for i, a in enumerate(legal)]
 
-    if session.mode == "advisor" and your_turn and legal:
-        model = get_model(session.advisor_model_spec)
-        obs_vec = sasquatch_spaces.vectorize_observation(game, obs, len(legal), session.num_players)
-        scores = {idx: score for idx, score in _rank_actions(model, obs_vec, obs_vec["action_mask"])}
-        for a in legal_actions:
-            a["score"] = round(scores.get(a["index"], 0.0), 3)
-        legal_actions.sort(key=lambda a: -a["score"])
-        legal_actions[0]["recommended"] = True
+    active = [] if game.is_game_over() else game.active_players()
+    acting_seat = active[0] if active and active[0] in session.manual_seats else None
+    your_turn = acting_seat == seat
+
+    acting_hand = None
+    legal_actions: list[dict] = []
+    if acting_seat is not None:
+        acting_obs = game.observation(acting_seat)
+        acting_hand = [_card_dict(game, c) for c in acting_obs.own_hand]
+        legal = game.legal_actions(acting_seat)
+        legal_actions = [{"index": i, "label": describe_action(game, a)} for i, a in enumerate(legal)]
+
+        if session.mode == "advisor" and your_turn and legal:
+            model = get_model(session.advisor_model_spec)
+            obs_vec = sasquatch_spaces.vectorize_observation(game, acting_obs, len(legal), session.num_players)
+            scores = {idx: score for idx, score in _rank_actions(model, obs_vec, obs_vec["action_mask"])}
+            for a in legal_actions:
+                a["score"] = round(scores.get(a["index"], 0.0), 3)
+            legal_actions.sort(key=lambda a: -a["score"])
+            legal_actions[0]["recommended"] = True
 
     return {
         "mode": session.mode,
@@ -236,6 +257,8 @@ def human_view(session: GameSession) -> dict:
         "phase": game.current_phase(),
         "turn_leader": game.turn_leader(),
         "your_turn": your_turn,
+        "acting_seat": acting_seat,
+        "acting_hand": acting_hand,
         "is_game_over": game.is_game_over(),
         "winner": game.winner(),
         "hand": [_card_dict(game, c) for c in obs.own_hand],
@@ -297,9 +320,14 @@ def api_new_game():
         return jsonify({"error": str(e)}), 400
 
     seat_policies = []
+    manual_seats = set()
     for i in range(num_players):
         if seated and i == human_seat:
             seat_policies.append(None)
+            manual_seats.add(i)
+        elif seated and seat_specs[i] == "manual":
+            seat_policies.append(None)
+            manual_seats.add(i)
         else:
             try:
                 seat_policies.append(get_policy(seat_specs[i]))
@@ -313,7 +341,7 @@ def api_new_game():
             return jsonify({"error": f"failed to load advisor model '{advisor_model_spec}': {e}"}), 400
 
     game_id = uuid.uuid4().hex[:12]
-    session = GameSession(game, num_players, mode, human_seat, seat_specs, seat_policies, advisor_model_spec)
+    session = GameSession(game, num_players, mode, human_seat, seat_specs, seat_policies, advisor_model_spec, manual_seats)
     GAMES[game_id] = session
 
     if seated:
@@ -345,18 +373,25 @@ def api_act(game_id):
     game = session.game
     if game.is_game_over():
         return jsonify({"error": "game is already over"}), 400
-    if game.active_players() != [session.human_seat]:
-        return jsonify({"error": "not your turn"}), 400
 
     body = request.get_json(force=True)
-    legal = game.legal_actions(session.human_seat)
+    # Defaults to your own seat; pass "seat" to instead enter what a
+    # manually-controlled *other* seat actually did (see `manual_seats`).
+    seat = int(body["seat"]) if body.get("seat") is not None else session.human_seat
+    if seat not in session.manual_seats:
+        return jsonify({"error": f"player_{seat} is not manually controlled"}), 400
+    if game.active_players() != [seat]:
+        return jsonify({"error": "not that seat's turn"}), 400
+
+    legal = game.legal_actions(seat)
     action_index = int(body["action_index"])
     if not (0 <= action_index < len(legal)):
         return jsonify({"error": "action_index out of range"}), 400
 
     action = legal[action_index]
-    session.log.append(f"You: {describe_action(game, action)}")
-    result = game.step(session.human_seat, action)
+    who = "You" if seat == session.human_seat else f"player_{seat} (manual)"
+    session.log.append(f"{who}: {describe_action(game, action)}")
+    result = game.step(seat, action)
     if result.done:
         session.log.append(f"Game over - winner: player_{result.winner}")
     else:

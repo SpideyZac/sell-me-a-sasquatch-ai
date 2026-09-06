@@ -8,8 +8,9 @@ async function loadStaticData() {
   MODELS = ["random", ...modelsJson.models];
 }
 
-function modelOptionsHtml() {
-  return MODELS.map((m) => `<option value="${m}">${m}</option>`).join("");
+function modelOptionsHtml(includeManual) {
+  const manual = includeManual ? `<option value="manual">Manual (I'll enter their moves)</option>` : "";
+  return manual + MODELS.map((m) => `<option value="${m}">${m}</option>`).join("");
 }
 
 function cardLabel(card) {
@@ -31,7 +32,7 @@ function setupTabs() {
 
 // shared: seat-model selects
 
-function renderSeatModelSelects(container, numPlayers, excludeSeat) {
+function renderSeatModelSelects(container, numPlayers, excludeSeat, includeManual) {
   container.innerHTML = "";
   for (let i = 0; i < numPlayers; i++) {
     if (i === excludeSeat) continue;
@@ -39,7 +40,7 @@ function renderSeatModelSelects(container, numPlayers, excludeSeat) {
     label.textContent = `player_${i} model `;
     const select = document.createElement("select");
     select.dataset.seat = i;
-    select.innerHTML = modelOptionsHtml();
+    select.innerHTML = modelOptionsHtml(includeManual);
     label.appendChild(select);
     container.appendChild(label);
   }
@@ -167,7 +168,7 @@ function initSeatedGame(prefix, mode) {
   const refresh = () => {
     const n = parseInt(numSel.value, 10);
     seatSel.innerHTML = Array.from({ length: n }, (_, i) => `<option value="${i}">player_${i}</option>`).join("");
-    renderSeatModelSelects(seatModelsDiv, n, parseInt(seatSel.value || "0", 10));
+    renderSeatModelSelects(seatModelsDiv, n, parseInt(seatSel.value || "0", 10), mode === "advisor");
   };
   numSel.addEventListener("change", refresh);
   seatSel.addEventListener("change", refresh);
@@ -200,11 +201,11 @@ function initSeatedGame(prefix, mode) {
   });
 }
 
-async function seatedGameAct(prefix, actionIndex) {
+async function seatedGameAct(prefix, seat, actionIndex) {
   const res = await fetch(`/api/games/${seatedGames[prefix]}/act`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action_index: actionIndex }),
+    body: JSON.stringify({ seat, action_index: actionIndex }),
   });
   const data = await res.json();
   if (data.error) return alert(data.error);
@@ -241,9 +242,15 @@ function renderSeatedGameState(prefix, state) {
       : "<div>none</div>");
 
   const actionsDiv = document.getElementById(`${prefix}-actions`);
-  if (state.your_turn && !state.is_game_over) {
-    actionsDiv.innerHTML = "<h3>Your move</h3>" + state.legal_actions.map(actionButtonHtml).join("");
-    actionsDiv.querySelectorAll(".action-btn").forEach((btn) => btn.addEventListener("click", () => seatedGameAct(prefix, parseInt(btn.dataset.idx, 10))));
+  if (state.acting_seat !== null && state.acting_seat !== undefined && !state.is_game_over) {
+    const heading = state.your_turn
+      ? "<h3>Your move</h3>"
+      : `<h3>player_${state.acting_seat}'s move <small>(manual - enter what they actually did)</small></h3>
+         <div class="manual-hand"><b>Their hand:</b> ${state.acting_hand.map(cardLabel).join(", ") || "(empty)"}</div>`;
+    actionsDiv.innerHTML = heading + state.legal_actions.map(actionButtonHtml).join("");
+    actionsDiv
+      .querySelectorAll(".action-btn")
+      .forEach((btn) => btn.addEventListener("click", () => seatedGameAct(prefix, state.acting_seat, parseInt(btn.dataset.idx, 10))));
   } else if (!state.is_game_over) {
     actionsDiv.innerHTML = "<h3>Waiting for other players...</h3>";
   } else {

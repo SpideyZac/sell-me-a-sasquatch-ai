@@ -50,6 +50,7 @@ select, input[type="number"] { padding: 0.3rem; }
 .log { max-height: 240px; overflow-y: auto; background: #fff; border: 1px solid #ddd; padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; }
 
 .actions { margin: 0.75rem 0; }
+.manual-hand { background: #fff8e1; border: 1px solid #e0c67a; border-radius: 4px; padding: 0.4rem 0.6rem; margin-bottom: 0.4rem; font-size: 0.9rem; }
 .action-btn { display: block; margin: 0.25rem 0; text-align: left; width: 100%; background: #1a5fb4; }
 .action-btn:hover { background: #2a7fe4; }
 .action-btn.recommended { background: #0a7d1e; }

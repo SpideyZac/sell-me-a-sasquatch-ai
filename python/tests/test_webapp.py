@@ -112,6 +112,52 @@ def test_advisor_mode_full_game_via_random_policy(client):
     assert 0 <= state["winner"] < 4
 
 
+def test_advisor_mode_with_manual_seat(client):
+    """A seat with spec "manual" has no policy: control never auto-resolves
+    through it, `act` must be told which seat is acting via `seat`, and the
+    view surfaces that seat's hand/legal actions as `acting_seat`/`acting_hand`
+    whenever it's their turn - e.g. for tracking a live physical game."""
+    resp = client.post(
+        "/api/games",
+        json={
+            "mode": "advisor",
+            "num_players": 4,
+            "human_seat": 2,
+            "seat_models": ["random", "manual", "random", "random"],
+            "advisor_model": "random",
+            "seed": 22,
+        },
+    )
+    assert resp.status_code == 200
+    game_id = resp.get_json()["game_id"]
+    state = resp.get_json()["state"]
+
+    # acting as the manual seat (1) without saying so is rejected
+    if state["acting_seat"] == 1:
+        bad = client.post(f"/api/games/{game_id}/act", json={"action_index": 0})
+        assert bad.status_code == 400
+
+    saw_manual_turn = False
+    for _ in range(300):
+        if state["is_game_over"]:
+            break
+        assert state["acting_seat"] in (1, 2), "only the human seat (2) or the manual seat (1) should ever need input"
+        if state["acting_seat"] == 1:
+            saw_manual_turn = True
+            assert state["acting_hand"] is not None
+            assert "score" not in state["legal_actions"][0], "manual opponents aren't scored, only your own turn is"
+            act_resp = client.post(f"/api/games/{game_id}/act", json={"seat": 1, "action_index": 0})
+        else:
+            assert state["your_turn"]
+            assert state["legal_actions"][0].get("recommended") is True
+            act_resp = client.post(f"/api/games/{game_id}/act", json={"action_index": 0})
+        assert act_resp.status_code == 200
+        state = act_resp.get_json()["state"]
+
+    assert saw_manual_turn, "the manual seat should have come up at least once over a full game"
+    assert state["is_game_over"]
+
+
 def test_creature_cards_display_tier_only_name(client):
     resp = client.post("/api/games", json={"mode": "watch", "num_players": 4, "seat_models": ["random"] * 4, "seed": 1})
     state = resp.get_json()["state"]
