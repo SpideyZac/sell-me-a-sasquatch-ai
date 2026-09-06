@@ -6,7 +6,7 @@
 mod common;
 
 use common::new_test_game;
-use sasquatch_engine::card::{CardKind, Tier};
+use sasquatch_engine::card::{CardKind, NastyKind, Tier};
 use sasquatch_engine::game::PinError;
 
 #[test]
@@ -20,6 +20,28 @@ fn pin_kind_overwrites_and_consumes_supply() {
     assert_eq!(game.card_kind(card), Some(CardKind::Creature(Tier::Giant)));
     assert!(game.is_pinned(card));
     assert_eq!(*game.kind_supply().get(&CardKind::Creature(Tier::Giant)).unwrap(), before - 1);
+}
+
+/// Regression test: `pin_kind` must overwrite `card_name` too, not just
+/// `card_kind` - otherwise a Nasty/Thingamabob card keeps showing whatever
+/// flavor name it happened to get at random deal-shuffle time (e.g. a card
+/// pinned to a Thingamabob could still display as "Trojan Horse"), since
+/// name and kind are two separate fields on `Card`.
+#[test]
+fn pin_kind_also_overwrites_the_stale_flavor_name() {
+    let mut game = new_test_game(4, 9);
+    // Find a hand card whose *original* random kind differs from what we're
+    // about to pin it to, so a stale name would actually be observable.
+    let card = *game
+        .player_hand(0)
+        .iter()
+        .find(|&&c| game.card_kind(c) != Some(CardKind::Nasty(NastyKind::TrojanHorse)))
+        .expect("test deck has a mix of kinds");
+
+    game.pin_kind(card, CardKind::Nasty(NastyKind::TrojanHorse)).unwrap();
+
+    assert_eq!(game.card_kind(card), Some(CardKind::Nasty(NastyKind::TrojanHorse)));
+    assert_eq!(game.card_name(card), Some("Trojan Horse"));
 }
 
 #[test]

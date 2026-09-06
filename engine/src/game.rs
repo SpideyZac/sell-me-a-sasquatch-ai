@@ -290,7 +290,20 @@ impl GameState {
             return Err(PinError::NoSupplyRemaining);
         }
         *remaining -= 1;
-        self.cards.get_mut(&card).expect("checked above").kind = kind;
+        let entry = self.cards.get_mut(&card).expect("checked above");
+        entry.kind = kind;
+        // `name` is a separate field, set once at deck-build time for
+        // whatever kind the card *originally, randomly* got - it must be
+        // overwritten too, or `card_name()` keeps returning the old
+        // (now-wrong) flavor name for Nasties/Thingamabobs, where display
+        // falls back to it (Creatures are shown by tier only, so this only
+        // ever bit Nasty/Thingamabob cards - see `card_display.display_name`
+        // on the Python side).
+        entry.name = match kind {
+            CardKind::Creature(tier) => tier.to_string(),
+            CardKind::Nasty(k) => k.name().to_string(),
+            CardKind::Thingamabob(k) => k.name().to_string(),
+        };
         self.pinned.insert(card);
         Ok(())
     }

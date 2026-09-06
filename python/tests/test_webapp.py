@@ -159,6 +159,24 @@ def test_live_game_starts_with_pin_hand_prompt(client):
     assert state["prompt"]["count"] == 5
 
 
+def test_live_game_pinned_hand_names_match_what_you_entered(client):
+    """Regression test: `pin_kind` overwrites a card's kind, but each card
+    also carries a separately-set flavor `name` from deck-shuffle time (see
+    `deck.rs`) - a Nasty/Thingamabob pinned to a *different* kind must not
+    keep displaying its old, now-wrong name (e.g. showing "Trojan Horse"
+    for a card you entered as some other Nasty/Thingamabob)."""
+    resp = client.post("/api/live", json={"num_players": 4, "human_seat": 0, "seed": 9, "advisor_model": "random"})
+    live_id = resp.get_json()["live_id"]
+    # A deliberately card-varied starting hand so a stale name would be
+    # observable regardless of what this seed's engine happened to deal.
+    entered_kinds = ["Nasty:Trojan Horse", "Thingamabob:Platonic Isolator", "Creature:Medium", "Creature:Tiny", "Nasty:Loan Shark"]
+    expected_names = ["Trojan Horse", "Platonic Isolator", "Medium Creature", "Tiny Creature", "Loan Shark"]
+    resp = client.post(f"/api/live/{live_id}/respond", json={"kinds": entered_kinds})
+    state = resp.get_json()["state"]
+    assert [c["kind"] for c in state["hand"]] == entered_kinds
+    assert [c["name"] for c in state["hand"]] == expected_names
+
+
 def test_live_game_opponent_turns_hide_unrevealed_kinds(client):
     resp = client.post("/api/live", json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"})
     live_id = resp.get_json()["live_id"]
