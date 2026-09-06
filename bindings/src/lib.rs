@@ -6,7 +6,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use sasquatch_engine::action::{Action, ThingamabobParams};
-use sasquatch_engine::card::{CardId, CardKind, PlayerId};
+use sasquatch_engine::card::{CardId, CardKind, NastyKind, PlayerId, Tier, ThingamabobKind};
 use sasquatch_engine::deck::DeckConfig;
 use sasquatch_engine::game::{Event, GameState, Observation, ObservedDeal};
 
@@ -15,6 +15,18 @@ fn card_kind_to_string(kind: CardKind) -> String {
         CardKind::Creature(tier) => format!("Creature:{tier}"),
         CardKind::Nasty(kind) => format!("Nasty:{}", kind.name()),
         CardKind::Thingamabob(kind) => format!("Thingamabob:{}", kind.name()),
+    }
+}
+
+/// Inverse of `card_kind_to_string` - parses e.g. `"Creature:Tiny"` back into
+/// a `CardKind`, for `PyGame::pin_kind` (live-tracking a physical game).
+fn parse_card_kind(s: &str) -> Option<CardKind> {
+    let (prefix, rest) = s.split_once(':')?;
+    match prefix {
+        "Creature" => Tier::parse(rest).map(CardKind::Creature),
+        "Nasty" => NastyKind::parse(rest).map(CardKind::Nasty),
+        "Thingamabob" => ThingamabobKind::parse(rest).map(CardKind::Thingamabob),
+        _ => None,
     }
 }
 
@@ -397,6 +409,43 @@ impl PyGame {
 
     fn card_name(&self, card: CardId) -> Option<String> {
         self.inner.card_name(card).map(str::to_string)
+    }
+
+    /// Full internal hand contents, bypassing observation privacy - only
+    /// meaningful for live-tracking, where the caller (not another in-game
+    /// player) is the sole source of truth for what's really in play.
+    fn player_hand(&self, player: PlayerId) -> Vec<CardId> {
+        self.inner.player_hand(player).to_vec()
+    }
+
+    fn player_collection(&self, player: PlayerId) -> Vec<CardId> {
+        self.inner.player_collection(player).to_vec()
+    }
+
+    fn player_point_tokens(&self, player: PlayerId) -> u32 {
+        self.inner.player_point_tokens(player)
+    }
+
+    /// Still-hidden card ids in `seller`'s active deal (empty if none).
+    fn hidden_cards_in_deal(&self, seller: PlayerId) -> Vec<CardId> {
+        self.inner.hidden_cards_in_deal(seller)
+    }
+
+    fn is_pinned(&self, card: CardId) -> bool {
+        self.inner.is_pinned(card)
+    }
+
+    /// Remaining not-yet-pinned supply per card class (e.g. `"Creature:Tiny"`
+    /// -> how many more could still be truthfully `pin_kind`-ed).
+    fn kind_supply(&self) -> std::collections::HashMap<String, u32> {
+        self.inner.kind_supply().iter().map(|(k, v)| (card_kind_to_string(*k), *v)).collect()
+    }
+
+    /// For live-tracking a physical game: overwrites `card`'s kind to match
+    /// what was actually revealed at the table (see `GameState::pin_kind`).
+    fn pin_kind(&mut self, card: CardId, kind: &str) -> PyResult<()> {
+        let kind = parse_card_kind(kind).ok_or_else(|| PyValueError::new_err(format!("unknown card kind: {kind}")))?;
+        self.inner.pin_kind(card, kind).map_err(|e| PyValueError::new_err(e.to_string()))
     }
 }
 

@@ -8,7 +8,7 @@ use crate::deck::{Catalog, DeckConfig};
 use crate::phase::{DealOfferEntry, DealOfferState, DealOfferStep, NastyResolutionState, PendingNasty, Phase, ThingamabobWindowState};
 use crate::player::{try_take_cards, try_take_point_tokens, Player};
 use crate::rng::GameRng;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 pub const HAND_SIZE: usize = 5;
@@ -76,6 +76,19 @@ pub enum RulesError {
     GameAlreadyOver,
 }
 
+/// Errors from "live-tracking" a physical game (§below `pin_kind`): pinning a
+/// card's kind to match what was actually revealed at the table, instead of
+/// the kind randomly assigned at deal-shuffle time.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum PinError {
+    #[error("card {0} does not exist in this game")]
+    UnknownCard(CardId),
+    #[error("card {0} was already pinned to a kind")]
+    AlreadyPinned(CardId),
+    #[error("no cards of that kind remain unaccounted for in the deck")]
+    NoSupplyRemaining,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum SetupError {
     #[error("num_players must be between 2 and 6, got {0}")]
@@ -123,6 +136,14 @@ pub struct GameState {
     turn_leader: PlayerId,
     phase: Phase,
     rng: GameRng,
+    /// Live-tracking support (`pin_kind`): remaining not-yet-pinned supply of
+    /// each kind, seeded from the deck's true composition. Cards start with
+    /// an arbitrary (random) kind from the shuffle; `pin_kind` overwrites it
+    /// once, when the card is actually revealed at the table, so all of the
+    /// engine's own bookkeeping (set completion, tokens, discards) runs on
+    /// truth instead of the random deal.
+    kind_supply: HashMap<CardKind, u32>,
+    pinned: HashSet<CardId>,
 }
 
 impl GameState {
@@ -140,6 +161,10 @@ impl GameState {
         rng.shuffle(&mut ids);
 
         let cards: HashMap<CardId, Card> = deck.cards.into_iter().map(|c| (c.id, c)).collect();
+        let mut kind_supply: HashMap<CardKind, u32> = HashMap::new();
+        for c in cards.values() {
+            *kind_supply.entry(c.kind).or_insert(0) += 1;
+        }
 
         let mut players: Vec<Player> = (0..num_players).map(|_| Player::new()).collect();
         let mut cursor = 0usize;
@@ -170,6 +195,8 @@ impl GameState {
             turn_leader,
             phase: Phase::GameOver { winner: 0 }, // placeholder, overwritten by start_new_turn
             rng,
+            kind_supply,
+            pinned: HashSet::new(),
         };
         game.start_new_turn();
         Ok(game)
@@ -224,6 +251,48 @@ impl GameState {
 
     pub fn player_point_tokens(&self, player: PlayerId) -> u32 {
         self.players[player].point_tokens
+    }
+
+    /// Still-hidden card ids in `seller`'s active deal (empty if no such
+    /// deal). Bypasses the usual observation privacy filtering - only
+    /// meant for a live-tracking caller who *is* the sole source of truth
+    /// for what these cards really are, not an in-game player peeking.
+    pub fn hidden_cards_in_deal(&self, seller: PlayerId) -> Vec<CardId> {
+        self.deal_for_seller(seller).map(|d| d.hidden_cards().collect()).unwrap_or_default()
+    }
+
+    pub fn is_pinned(&self, card: CardId) -> bool {
+        self.pinned.contains(&card)
+    }
+
+    /// Remaining not-yet-pinned supply per kind (how many more cards of that
+    /// kind could still be truthfully assigned via `pin_kind`).
+    pub fn kind_supply(&self) -> &HashMap<CardKind, u32> {
+        &self.kind_supply
+    }
+
+    /// For live-tracking a physical game (see `kind_supply` field docs):
+    /// overwrites `card`'s kind to `kind`, matching what was actually
+    /// revealed at the table, and consumes one unit of that kind's
+    /// remaining supply so the deck's true composition (from `deck.toml`)
+    /// is never exceeded. Every downstream rule (set completion, Nasty/
+    /// Thingamabob effects, tokens, discards) reads `card_kind` normally
+    /// afterward, so once pinned a card behaves exactly like a "real" one.
+    pub fn pin_kind(&mut self, card: CardId, kind: CardKind) -> Result<(), PinError> {
+        if !self.cards.contains_key(&card) {
+            return Err(PinError::UnknownCard(card));
+        }
+        if self.pinned.contains(&card) {
+            return Err(PinError::AlreadyPinned(card));
+        }
+        let remaining = self.kind_supply.get_mut(&kind).ok_or(PinError::NoSupplyRemaining)?;
+        if *remaining == 0 {
+            return Err(PinError::NoSupplyRemaining);
+        }
+        *remaining -= 1;
+        self.cards.get_mut(&card).expect("checked above").kind = kind;
+        self.pinned.insert(card);
+        Ok(())
     }
 
     /// Total card count across hand+draw+discard+deals+collections. Used by

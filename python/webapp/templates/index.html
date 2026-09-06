@@ -12,7 +12,7 @@
     <nav>
       <button class="tab-btn active" data-tab="watch">Watch AIs</button>
       <button class="tab-btn" data-tab="play">Play vs AIs</button>
-      <button class="tab-btn" data-tab="advisor">Move Advisor</button>
+      <button class="tab-btn" data-tab="advisor">Live Game</button>
     </nav>
   </header>
 
@@ -64,10 +64,11 @@
   </section>
 
   <section id="tab-advisor" class="tab-panel">
-    <p class="disclaimer">A real game session, just like Play - hands, collections, deals, and the draw/discard
-      piles are all tracked exactly. Every option you can take is ranked by the advisor model, best first.
-      Set any opponent's model to "Manual" to enter their real moves yourself instead - handy for following along
-      with a live physical game.</p>
+    <p class="disclaimer">For an actual live (physical) game. It's still the real rules engine underneath - so
+      collections, point totals, discard/draw piles, and set trade-ins are all handled for you automatically and
+      correctly - but nothing is dealt randomly. You just enter each card's real identity exactly when it becomes
+      visible at the table (your starting hand, then anything as it's revealed); the advisor ranks your own
+      decisions along the way.</p>
     <div class="setup" id="advisor-setup">
       <label>Players
         <select id="advisor-num-players">
@@ -75,7 +76,6 @@
         </select>
       </label>
       <label>Your seat <select id="advisor-human-seat"></select></label>
-      <div id="advisor-seat-models" class="seat-models"></div>
       <label>Advisor model <select id="advisor-model"></select></label>
       <label>Seed (optional) <input type="number" id="advisor-seed"></label>
       <button id="advisor-start">Start</button>
@@ -86,7 +86,7 @@
       <div class="hand" id="advisor-hand"></div>
       <div class="players" id="advisor-players"></div>
       <div class="deals" id="advisor-deals"></div>
-      <div class="actions" id="advisor-actions"></div>
+      <div class="prompt" id="advisor-prompt"></div>
       <div class="log" id="advisor-log"></div>
     </div>
   </section>
