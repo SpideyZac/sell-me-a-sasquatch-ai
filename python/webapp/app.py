@@ -26,15 +26,15 @@ from __future__ import annotations
 import random
 import uuid
 
-from flask import Flask, abort, jsonify, render_template, request
+from flask import Flask, abort, jsonify, render_template, request  # type: ignore
 
-from sell_me_a_sasquatch import _native as native
+from sell_me_a_sasquatch import _native as native  # type: ignore
 from sell_me_a_sasquatch import spaces as sasquatch_spaces
 from sell_me_a_sasquatch.env import DEFAULT_DECK_PATH
 
-from card_display import card_dict, describe_action
-from live_game import LiveGameError, LiveSession
-from models import get_policy, list_available_models
+from card_display import card_dict, describe_action  # type: ignore
+from live_game import LiveGameError, LiveSession  # type: ignore
+from models import get_policy, list_available_models  # type: ignore
 
 app = Flask(__name__)
 GAMES: dict[str, "GameSession"] = {}
@@ -47,7 +47,15 @@ LIVE_GAMES: dict[str, LiveSession] = {}
 class GameSession:
     """One watch or play game in progress, with a policy per non-human seat."""
 
-    def __init__(self, game, num_players: int, mode: str, human_seat: "int | None", seat_specs: list[str], seat_policies: list):
+    def __init__(
+        self,
+        game,
+        num_players: int,
+        mode: str,
+        human_seat: "int | None",
+        seat_specs: list[str],
+        seat_policies: list,
+    ):
         """Wraps an already-constructed `native.Game` with UI-facing session state."""
         self.game = game
         self.num_players = num_players
@@ -81,7 +89,8 @@ def _step_seat(session: GameSession, player: int) -> None:
 
 
 def _auto_resolve_ai_turns(session: GameSession, max_steps: int = 1000) -> None:
-    """Steps every non-human seat until it's the human's turn, the game ends, or `max_steps` is hit."""
+    """Steps every non-human seat until it's the human's turn,
+    the game ends, or `max_steps` is hit."""
     game = session.game
     for _ in range(max_steps):
         if game.is_game_over():
@@ -103,7 +112,14 @@ def spectator_view(session: GameSession) -> dict:
         collections.append([card_dict(game, c) for c in obs.collections[p]])
         tokens.append(obs.point_tokens[p])
     obs0 = game.observation(0)
-    deals = [{"seller": d.seller, "revealed": [card_dict(game, c) for c in d.revealed_cards], "num_hidden": d.num_hidden} for d in obs0.deals]
+    deals = [
+        {
+            "seller": d.seller,
+            "revealed": [card_dict(game, c) for c in d.revealed_cards],
+            "num_hidden": d.num_hidden,
+        }
+        for d in obs0.deals
+    ]
     return {
         "mode": "watch",
         "num_players": n,
@@ -143,10 +159,19 @@ def human_view(session: GameSession) -> dict:
         "hand": [card_dict(game, c) for c in obs.own_hand],
         "point_tokens": list(obs.point_tokens),
         "collections": [[card_dict(game, c) for c in coll] for coll in obs.collections],
-        "deals": [{"seller": d.seller, "revealed": [card_dict(game, c) for c in d.revealed_cards], "num_hidden": d.num_hidden} for d in obs.deals],
+        "deals": [
+            {
+                "seller": d.seller,
+                "revealed": [card_dict(game, c) for c in d.revealed_cards],
+                "num_hidden": d.num_hidden,
+            }
+            for d in obs.deals
+        ],
         "draw_pile_len": obs.draw_pile_len,
         "discard_pile_len": obs.discard_pile_len,
-        "legal_actions": [{"index": i, "label": describe_action(game, a)} for i, a in enumerate(legal)],
+        "legal_actions": [
+            {"index": i, "label": describe_action(game, a)} for i, a in enumerate(legal)
+        ],
         "log": session.log[-40:],
     }
 
@@ -161,7 +186,7 @@ def _get_session(game_id: str) -> GameSession:
     session = GAMES.get(game_id)
     if session is None:
         abort(404, "unknown game_id")
-    return session
+    return session  # type: ignore
 
 
 def _get_live_session(live_id: str) -> LiveSession:
@@ -169,7 +194,7 @@ def _get_live_session(live_id: str) -> LiveSession:
     session = LIVE_GAMES.get(live_id)
     if session is None:
         abort(404, "unknown live_id")
-    return session
+    return session  # type: ignore
 
 
 # routes: pages
@@ -192,24 +217,40 @@ def api_new_game():
     """Starts a new watch or play game."""
     body = request.get_json(force=True)
     num_players = int(body["num_players"])
-    if not (2 <= num_players <= 6):
+    if not 2 <= num_players <= 6:
         return jsonify({"error": "num_players must be 2-6"}), 400
     mode = body.get("mode", "watch")
     if mode not in ("watch", "play"):
         return jsonify({"error": "mode must be 'watch' or 'play'"}), 400
     deck = body.get("deck") or DEFAULT_DECK_PATH
-    seed = int(body["seed"]) if body.get("seed") not in (None, "") else random.randint(0, 2**63 - 1)
-    first_player = int(body["first_player"]) if body.get("first_player") not in (None, "") else None
-    if first_player is not None and not (0 <= first_player < num_players):
+    seed = (
+        int(body["seed"])
+        if body.get("seed") not in (None, "")
+        else random.randint(0, 2**63 - 1)
+    )
+    first_player = (
+        int(body["first_player"])
+        if body.get("first_player") not in (None, "")
+        else None
+    )
+    if first_player is not None and not 0 <= first_player < num_players:
         return jsonify({"error": "first_player out of range"}), 400
 
     seat_specs = body.get("seat_models") or ["random"] * num_players
     seat_specs = (seat_specs + ["random"] * num_players)[:num_players]
-    human_seat = int(body["human_seat"]) if mode == "play" and body.get("human_seat") is not None else (0 if mode == "play" else None)
+    human_seat = (
+        int(body["human_seat"])
+        if mode == "play" and body.get("human_seat") is not None
+        else (0 if mode == "play" else None)
+    )
 
     try:
-        game = native.Game(num_players, deck, seed, first_player)
-    except Exception as e:  # noqa: BLE001 - surface engine setup errors to the UI as-is
+        game = native.Game(
+            num_players, deck, seed, first_player
+        )  # pylint: disable=c-extension-no-member
+    except (
+        Exception
+    ) as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001 - surface engine setup errors to the UI as-is
         return jsonify({"error": str(e)}), 400
 
     seat_policies = []
@@ -219,11 +260,18 @@ def api_new_game():
         else:
             try:
                 seat_policies.append(get_policy(seat_specs[i]))
-            except Exception as e:  # noqa: BLE001
-                return jsonify({"error": f"failed to load model '{seat_specs[i]}': {e}"}), 400
+            except (
+                Exception
+            ) as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001
+                return (
+                    jsonify({"error": f"failed to load model '{seat_specs[i]}': {e}"}),
+                    400,
+                )
 
     game_id = uuid.uuid4().hex[:12]
-    session = GameSession(game, num_players, mode, human_seat, seat_specs, seat_policies)
+    session = GameSession(
+        game, num_players, mode, human_seat, seat_specs, seat_policies
+    )
     GAMES[game_id] = session
 
     if mode == "play":
@@ -251,7 +299,8 @@ def api_advance(game_id):
 
 @app.route("/api/games/<game_id>/act", methods=["POST"])
 def api_act(game_id):
-    """Applies the human's chosen action in a play-mode game, then resolves any following AI turns."""
+    """Applies the human's chosen action in a play-mode game,
+    then resolves any following AI turns."""
     session = _get_session(game_id)
     if session.mode != "play":
         return jsonify({"error": "act is only for play-mode games"}), 400
@@ -264,7 +313,7 @@ def api_act(game_id):
     body = request.get_json(force=True)
     legal = game.legal_actions(session.human_seat)
     action_index = int(body["action_index"])
-    if not (0 <= action_index < len(legal)):
+    if not 0 <= action_index < len(legal):
         return jsonify({"error": "action_index out of range"}), 400
 
     action = legal[action_index]
@@ -290,23 +339,35 @@ def api_new_live_game():
     """Starts a new live tracker session for a physical game."""
     body = request.get_json(force=True)
     num_players = int(body["num_players"])
-    if not (2 <= num_players <= 6):
+    if not 2 <= num_players <= 6:
         return jsonify({"error": "num_players must be 2-6"}), 400
     human_seat = int(body.get("human_seat", 0))
-    if not (0 <= human_seat < num_players):
+    if not 0 <= human_seat < num_players:
         return jsonify({"error": "human_seat out of range"}), 400
     deck = body.get("deck") or DEFAULT_DECK_PATH
-    seed = int(body["seed"]) if body.get("seed") not in (None, "") else random.randint(0, 2**63 - 1)
+    seed = (
+        int(body["seed"])
+        if body.get("seed") not in (None, "")
+        else random.randint(0, 2**63 - 1)
+    )
     advisor_model = body.get("advisor_model", "random")
-    first_player = int(body["first_player"]) if body.get("first_player") not in (None, "") else None
-    if first_player is not None and not (0 <= first_player < num_players):
+    first_player = (
+        int(body["first_player"])
+        if body.get("first_player") not in (None, "")
+        else None
+    )
+    if first_player is not None and not 0 <= first_player < num_players:
         return jsonify({"error": "first_player out of range"}), 400
 
     try:
-        session = LiveSession(num_players, human_seat, deck, seed, advisor_model, first_player)
+        session = LiveSession(
+            num_players, human_seat, deck, seed, advisor_model, first_player
+        )
     except LiveGameError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:  # noqa: BLE001 - surface engine/model setup errors to the UI as-is
+    except (
+        Exception
+    ) as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001 - surface engine/model setup errors to the UI as-is
         return jsonify({"error": str(e)}), 400
 
     live_id = uuid.uuid4().hex[:12]

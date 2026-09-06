@@ -2,12 +2,18 @@
 
 import os
 
-import numpy as np
-import pytest
+import numpy as np  # type: ignore
+import pytest  # type: ignore
 
-from sell_me_a_sasquatch.selfplay_env import OpponentPool, SasquatchSelfPlayEnv, random_masked_policy
+from sell_me_a_sasquatch.selfplay_env import (
+    OpponentPool,
+    SasquatchSelfPlayEnv,
+    random_masked_policy,
+)
 
-DECK_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "configs", "deck.toml"))
+DECK_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "configs", "deck.toml")
+)
 
 
 def make_env(**kwargs):
@@ -57,7 +63,7 @@ def test_one_env_plays_every_table_size():
 def test_action_space_width_covers_every_table_size():
     env = make_env(players=(2, 3, 4, 5, 6))
     for n in (2, 3, 4, 5, 6):
-        assert env.action_space.n >= env.deck.max_legal_actions(n)
+        assert env.action_space.n >= env.deck.max_legal_actions(n)  # type: ignore
 
 
 def test_learner_seat_can_be_fixed():
@@ -69,7 +75,7 @@ def test_learner_seat_can_be_fixed():
 def test_masked_out_action_index_is_handled_defensively():
     env = make_env(players=4)
     env.reset(seed=3)
-    illegal_action = env.action_space.n - 1
+    illegal_action = env.action_space.n - 1  # type: ignore
     assert env.action_masks()[illegal_action] == 0
     obs, reward, terminated, truncated, info = env.step(illegal_action)
     assert env.observation_space.contains(obs)
@@ -100,7 +106,9 @@ def test_opponent_pool_falls_back_to_random_with_no_model_or_snapshots():
     pool.new_episode()
     mask = np.zeros(8, dtype=np.int8)
     mask[0] = 1
-    assert pool(obs={}, mask=mask, legal_count=1) == 0  # one legal action -> deterministic
+    assert (
+        pool(obs={}, mask=mask, legal_count=1) == 0
+    )  # one legal action -> deterministic
 
 
 def test_opponent_pool_add_snapshot_caps_at_max_snapshots():
@@ -111,15 +119,19 @@ def test_opponent_pool_add_snapshot_caps_at_max_snapshots():
 
 
 def test_opponent_pool_always_uses_live_model_when_no_snapshots_exist_yet():
-    pool = OpponentPool(current_prob=0.0)  # would always prefer a snapshot if any existed
-    pool.model = _StubModel("live")
+    pool = OpponentPool(
+        current_prob=0.0
+    )  # would always prefer a snapshot if any existed
+    pool.model = _StubModel("live")  # type: ignore
     pool.new_episode()
     assert pool._active is pool.model
 
 
 def test_opponent_pool_can_select_an_older_snapshot():
-    pool = OpponentPool(current_prob=0.0, max_snapshots=5)  # never prefer the live model once snapshots exist
-    pool.model = _StubModel("live")
+    pool = OpponentPool(
+        current_prob=0.0, max_snapshots=5
+    )  # never prefer the live model once snapshots exist
+    pool.model = _StubModel("live")  # type: ignore
     pool.add_snapshot(_StubModel("old"))
     pool.new_episode()
     assert pool._active is pool.snapshots[0]

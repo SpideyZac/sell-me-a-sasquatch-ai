@@ -27,7 +27,7 @@ def get_model(spec: str):
     if spec.lower() == "random":
         return None
     if spec not in _MODEL_CACHE:
-        from sb3_contrib import MaskablePPO  # lazy: only needed for real models
+        from sb3_contrib import MaskablePPO  # type: ignore  # lazy: only needed for real models  # pylint: disable=import-outside-toplevel
 
         model = MaskablePPO.load(_resolve_model_path(spec), device="cpu")
         _check_observation_format(spec, model)
@@ -71,11 +71,11 @@ def get_policy(spec: str):
     if model is None:
         return random_masked_policy
 
-    def _policy(obs, mask, legal_count):
-        action, _ = model.predict(obs, action_masks=mask, deterministic=True)
+    def _policy(obs, mask, _legal_count):
+        action, _ = model.predict(obs, action_masks=mask, deterministic=True)  # type: ignore
         return int(action)
 
-    _policy.max_actions = observation_width(model)
+    _policy.max_actions = observation_width(model)  # type: ignore
     return _policy
 
 

@@ -30,12 +30,12 @@ State machine, in one pass over a turn:
 
 from __future__ import annotations
 
-from sell_me_a_sasquatch import _native as native
+from sell_me_a_sasquatch import _native as native  # type: ignore
 from sell_me_a_sasquatch import spaces as sasquatch_spaces
 
-from card_display import card_dict, display_name, human_card_class_label
-from models import get_model, observation_width
-from scoring import rank_actions
+from card_display import card_dict, display_name, human_card_class_label  # type: ignore
+from models import get_model, observation_width  # type: ignore
+from scoring import rank_actions  # type: ignore
 
 MAX_SETTLE_STEPS = 2000
 """Safety cap on auto-applied steps per settle pass, guards against an infinite loop bug."""
@@ -49,9 +49,19 @@ class LiveGameError(Exception):
 class LiveSession:
     """One live-tracked physical game in progress."""
 
-    def __init__(self, num_players: int, human_seat: int, deck_path: str, seed: int, advisor_model_spec: str, first_player: int | None = None):
+    def __init__(
+        self,
+        num_players: int,
+        human_seat: int,
+        deck_path: str,
+        seed: int,
+        advisor_model_spec: str,
+        first_player: int | None = None,
+    ):
         """Starts a new live session with every card unpinned."""
-        self.game = native.Game(num_players, deck_path, seed, first_player)
+        self.game = native.Game(
+            num_players, deck_path, seed, first_player
+        )  # pylint: disable=c-extension-no-member
         self.num_players = num_players
         self.human_seat = human_seat
         self.advisor_model_spec = advisor_model_spec
@@ -68,7 +78,8 @@ class LiveSession:
     # public API
 
     def state(self) -> dict:
-        """The full JSON state for the live tracker UI: hands, collections, deals, and the current prompt."""
+        """The full JSON state for the live tracker UI: hands,
+        collections, deals, and the current prompt."""
         game = self.game
         obs = game.observation(self.human_seat)
         return {
@@ -79,10 +90,20 @@ class LiveSession:
             "is_game_over": game.is_game_over(),
             "winner": game.winner(),
             "hand": [card_dict(game, c) for c in game.player_hand(self.human_seat)],
-            "point_tokens": [game.player_point_tokens(p) for p in range(self.num_players)],
-            "collections": [[card_dict(game, c) for c in game.player_collection(p)] for p in range(self.num_players)],
+            "point_tokens": [
+                game.player_point_tokens(p) for p in range(self.num_players)
+            ],
+            "collections": [
+                [card_dict(game, c) for c in game.player_collection(p)]
+                for p in range(self.num_players)
+            ],
             "deals": [
-                {"seller": d.seller, "revealed": [card_dict(game, c) for c in d.revealed_cards], "num_hidden": d.num_hidden} for d in obs.deals
+                {
+                    "seller": d.seller,
+                    "revealed": [card_dict(game, c) for c in d.revealed_cards],
+                    "num_hidden": d.num_hidden,
+                }
+                for d in obs.deals
             ],
             "draw_pile_len": obs.draw_pile_len,
             "discard_pile_len": obs.discard_pile_len,
@@ -122,7 +143,9 @@ class LiveSession:
             return {
                 "type": "pin_hand",
                 "count": len(unpinned_hand),
-                "context": "starting_hand" if self._awaiting_initial_hand else "hand_refill",
+                "context": (
+                    "starting_hand" if self._awaiting_initial_hand else "hand_refill"
+                ),
             }
         if self.pending_resolution is not None:
             pr = self.pending_resolution
@@ -172,7 +195,14 @@ class LiveSession:
     def _kind_options(self) -> list[dict]:
         """Every card class the UI can offer for a pin prompt, with remaining supply."""
         supply = self.game.kind_supply()
-        return [{"value": c, "label": human_card_class_label(c), "remaining": supply.get(c, 0)} for c in sasquatch_spaces.CARD_CLASSES]
+        return [
+            {
+                "value": c,
+                "label": human_card_class_label(c),
+                "remaining": supply.get(c, 0),
+            }
+            for c in sasquatch_spaces.CARD_CLASSES
+        ]
 
     # the settle loop: auto-apply everything that isn't a genuine choice
 
@@ -195,7 +225,9 @@ class LiveSession:
                 return
             if not self._dispatch(seat, groups[0]["action"]):
                 return
-        raise LiveGameError("live session failed to settle, this is a bug, please report it")
+        raise LiveGameError(
+            "live session failed to settle, this is a bug, please report it"
+        )
 
     def _dispatch(self, seat: int, action) -> bool:
         """Applies `action` if it can be applied right now, or defers it via
@@ -210,15 +242,27 @@ class LiveSession:
         if kind == "resolution":
             return self._start_resolution(seat, action)
         if kind == "reveal_card":
-            self.pending_reveal = {"reveal_type": "opponent_deal_reveal", "seat": seat, "card": payload}
+            self.pending_reveal = {
+                "reveal_type": "opponent_deal_reveal",
+                "seat": seat,
+                "card": payload,
+            }
             return False
         if kind == "spectro":
             d = action.to_dict()
-            self.pending_reveal = {"reveal_type": "spectro", "action": action, "seat": seat, "card": payload, "target_deal": d["target_deal"]}
+            self.pending_reveal = {
+                "reveal_type": "spectro",
+                "action": action,
+                "seat": seat,
+                "card": payload,
+                "target_deal": d["target_deal"],
+            }
             return False
         if kind == "buyer_peek":
             return self._apply_buyer_peek(seat, payload)
-        raise LiveGameError(f"unhandled pin requirement: {kind}")  # pragma: no cover, defensive
+        raise LiveGameError(
+            f"unhandled pin requirement: {kind}"
+        )  # pragma: no cover, defensive
 
     def _pin_requirement(self, action) -> "tuple[str, int] | None":
         """What (if anything) needs a kind pinned before/after `action` can
@@ -231,7 +275,11 @@ class LiveSession:
             return ("reveal_card", d["card"])
         if t == "buyer_peek":
             return ("buyer_peek", d["target_seller"])
-        if t == "play_thingamabob" and d.get("effect") == "spectroelectric_optimeter" and not self.game.is_pinned(d["target_card"]):
+        if (
+            t == "play_thingamabob"
+            and d.get("effect") == "spectroelectric_optimeter"
+            and not self.game.is_pinned(d["target_card"])
+        ):
             return ("spectro", d["target_card"])
         return None
 
@@ -251,24 +299,40 @@ class LiveSession:
         if not unpinned:
             self._apply(seat, action)
             return True
-        self.pending_resolution = {"seat": seat, "action": action, "unpinned": unpinned, "seller_of": seller_of}
+        self.pending_resolution = {
+            "seat": seat,
+            "action": action,
+            "unpinned": unpinned,
+            "seller_of": seller_of,
+        }
         return False
 
     def _apply_buyer_peek(self, seat: int, target_seller: int) -> bool:
-        """Applies a buyer peek and defers to a reveal prompt unless the peeked card is already pinned."""
-        action = native.Action.buyer_peek(target_seller)
+        """Applies a buyer peek and defers to a reveal prompt unless
+        the peeked card is already pinned."""
+        action = native.Action.buyer_peek(
+            target_seller
+        )  # pylint: disable=c-extension-no-member
         who = "You" if seat == self.human_seat else f"player_{seat}"
         self.log.append(f"{who}: peeked into player_{target_seller}'s deal")
         result = self.game.step(seat, action)
-        card = next((ev["card"] for ev in result.events() if ev["type"] == "buyer_peeked"), None)
-        if result.done:  # pragma: no cover, a peek can't itself end the game, kept for safety
+        card = next(
+            (ev["card"] for ev in result.events() if ev["type"] == "buyer_peeked"), None
+        )
+        if (
+            result.done
+        ):  # pragma: no cover, a peek can't itself end the game, kept for safety
             self.log.append(f"Game over - winner: player_{result.winner}")
         if card is not None and self.game.is_pinned(card):
             # recycled via a discard/draw-pile reshuffle, its kind is
             # already known truth, nothing new to ask about
             self.log.append(f"The peek revealed: {display_name(self.game, card)}")
             return True
-        self.pending_reveal = {"reveal_type": "buyer_peek_followup", "card": card, "seller": target_seller}
+        self.pending_reveal = {
+            "reveal_type": "buyer_peek_followup",
+            "card": card,
+            "seller": target_seller,
+        }
         return False
 
     def _apply(self, seat: int, action) -> None:
@@ -291,9 +355,13 @@ class LiveSession:
         was_initial = self._awaiting_initial_hand
         self._awaiting_initial_hand = False
         if was_initial:
-            self.log.append(f"Your starting hand: {', '.join(display_name(self.game, c) for c in unpinned)}")
+            self.log.append(
+                f"Your starting hand: {', '.join(display_name(self.game, c) for c in unpinned)}"
+            )
         else:
-            self.log.append(f"You drew: {', '.join(display_name(self.game, c) for c in unpinned)}")
+            self.log.append(
+                f"You drew: {', '.join(display_name(self.game, c) for c in unpinned)}"
+            )
         self._settle()
 
     def _pin_resolution(self, kinds: list[str]) -> None:
@@ -318,7 +386,9 @@ class LiveSession:
         self._pin(pr["card"], kind)
         self.pending_reveal = None
         if pr["reveal_type"] == "opponent_deal_reveal":
-            self._apply(pr["seat"], native.Action.reveal_card(pr["card"]))
+            self._apply(
+                pr["seat"], native.Action.reveal_card(pr["card"])
+            )  # pylint: disable=c-extension-no-member
         elif pr["reveal_type"] == "spectro":
             self._apply(pr["seat"], pr["action"])
         elif pr["reveal_type"] == "buyer_peek_followup":
@@ -334,7 +404,7 @@ class LiveSession:
         seat = self.game.active_player()
         legal = self.game.legal_actions(seat)
         groups = self._group_actions(seat, legal)
-        if not (0 <= index < len(groups)):
+        if not 0 <= index < len(groups):
             raise LiveGameError("choice index out of range")
         self._dispatch(seat, groups[index]["action"])
         self._settle()
@@ -350,7 +420,11 @@ class LiveSession:
 
     def _unpinned_human_hand(self) -> list[int]:
         """Ids of the human's hand cards that still need a kind pinned."""
-        return [c for c in self.game.player_hand(self.human_seat) if not self.game.is_pinned(c)]
+        return [
+            c
+            for c in self.game.player_hand(self.human_seat)
+            if not self.game.is_pinned(c)
+        ]
 
     def _all_active_deal_sellers(self) -> list[int]:
         """Sellers of every currently active deal."""
@@ -371,18 +445,20 @@ class LiveSession:
                 groups.append({"label": label, "indices": [i], "action": action})
         return groups
 
-    def _score_groups(self, legal: list, groups: list[dict]) -> None:
+    def _score_groups(self, _legal: list, groups: list[dict]) -> None:
         """Scores each action group with the advisor model and flags the best one as recommended."""
         model = get_model(self.advisor_model_spec)
         width = observation_width(model) or self.game.max_legal_actions()
-        obs, mask, _ = sasquatch_spaces.encode_for_player(self.game, self.human_seat, width)
+        obs, mask, _ = sasquatch_spaces.encode_for_player(
+            self.game, self.human_seat, width
+        )
         ranked = dict(rank_actions(model, obs, mask))
         for g in groups:
             g["score"] = round(sum(ranked.get(i, 0.0) for i in g["indices"]), 3)
         if groups:
             max(groups, key=lambda g: g["score"])["recommended"] = True
 
-    def _live_action_label(self, seat: int, action) -> str:
+    def _live_action_label(self, _seat: int, action) -> str:
         """Like `card_display.describe_action`, but shows "???" (or, where
         the specific position is itself a real choice, "hidden card #N")
         for anything not yet pinned, never leaks a card's true kind before
@@ -414,7 +490,9 @@ class LiveSession:
                 return display_name(game, cid)
             for seller in self._all_active_deal_sellers():
                 if cid in game.hidden_cards_in_deal(seller):
-                    whose = "your" if seller == self.human_seat else f"player_{seller}'s"
+                    whose = (
+                        "your" if seller == self.human_seat else f"player_{seller}'s"
+                    )
                     return f"a card from {whose} pile"
             return "???"
 
@@ -429,7 +507,9 @@ class LiveSession:
         if t == "buyer_peek":
             return f"Peek into player_{d['target_seller']}'s deal"
         if t == "play_thingamabob":
-            name = label(d["card"])  # always from seat's own collection, always already pinned
+            name = label(
+                d["card"]
+            )  # always from seat's own collection, always already pinned
             effect = d["effect"]
             if effect == "platonic_isolator":
                 return f"Play {name}: steal a token from player_{d['target_player']}"
@@ -437,27 +517,39 @@ class LiveSession:
                 removals = d["removals"]
                 if not removals:
                     return f"Play {name} (discard, no removals)"
-                parts = "; ".join(f"remove {positioned(s, c)} from player_{s}'s deal" for s, c in removals)
+                parts = "; ".join(
+                    f"remove {positioned(s, c)} from player_{s}'s deal"
+                    for s, c in removals
+                )
                 return f"Play {name}: {parts}"
             if effect == "cryptozootic_expander":
-                return f"Play {name}: add {label(d['hand_card'])} to player_{d['target_deal']}'s deal (face down)"
+                return f"Play {name}: add {label(d['hand_card'])} to player_{d['target_deal']}'s deal (face down)"  # pylint: disable=line-too-long
             if effect == "spectroelectric_optimeter":
-                return f"Play {name}: reveal {positioned(d['target_deal'], d['target_card'])} in player_{d['target_deal']}'s deal"
+                return f"Play {name}: reveal {positioned(d['target_deal'], d['target_card'])} in player_{d['target_deal']}'s deal"  # pylint: disable=line-too-long
             return f"Play {name}"
         if t == "pass_thingamabob_window":
             return "Pass"
         if t == "choose_deal":
             return f"Choose player_{d['seller']}'s deal"
         if t == "respond_to_deal":
-            return "Reverse the deal (swap piles)" if d["reverse"] else "Accept the deal (keep your own pile)"
+            return (
+                "Reverse the deal (swap piles)"
+                if d["reverse"]
+                else "Accept the deal (keep your own pile)"
+            )
         if t == "resolve_nasty_penalty":
             taken = d["taken_cards"]
-            return "Take nothing (decline)" if not taken else f"Take: {', '.join(label(c) for c in taken)}"
+            return (
+                "Take nothing (decline)"
+                if not taken
+                else f"Take: {', '.join(label(c) for c in taken)}"
+            )
         return str(d)  # pragma: no cover, defensive
 
 
 def _require_list(payload: dict, key: str) -> list:
-    """Extracts `key` from `payload` as a list, raising `LiveGameError` if it's missing or the wrong type."""
+    """Extracts `key` from `payload` as a list,
+    raising `LiveGameError` if it's missing or the wrong type."""
     value = payload.get(key)
     if not isinstance(value, list):
         raise LiveGameError(f"expected '{key}': [...]")

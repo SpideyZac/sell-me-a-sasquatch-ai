@@ -33,15 +33,15 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
-import numpy as np
-import torch as th
-from gymnasium import spaces
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
+import numpy as np  # type: ignore
+import torch as th  # type: ignore
+from gymnasium import spaces  # type: ignore
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor  # type: ignore
+from stable_baselines3.common.type_aliases import PyTorchObs, Schedule  # type: ignore
 from torch import nn
 
-from sb3_contrib.common.maskable.distributions import MaskableDistribution
-from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
+from sb3_contrib.common.maskable.distributions import MaskableDistribution  # type: ignore
+from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy  # type: ignore
 
 
 class StateExtractor(BaseFeaturesExtractor):
@@ -55,7 +55,9 @@ class StateExtractor(BaseFeaturesExtractor):
 
     def __init__(self, observation_space: spaces.Dict):
         """Builds an extractor sized to the `state` field's width."""
-        super().__init__(observation_space, features_dim=int(observation_space["state"].shape[0]))
+        super().__init__(
+            observation_space, features_dim=int(observation_space["state"].shape[0])  # type: ignore
+        )
 
     def forward(self, observations: dict[str, th.Tensor]) -> th.Tensor:
         """Passes `obs["state"]` through unchanged."""
@@ -81,9 +83,14 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
         **kwargs,
     ):
         """Builds the policy, deferring the actual head to `_build`."""
-        if not isinstance(observation_space, spaces.Dict) or "actions" not in observation_space.spaces:
-            raise ValueError("MaskablePointerPolicy needs a Dict observation space with 'state' and 'actions'")
-        self.action_feat_dim = int(observation_space["actions"].shape[1])
+        if (
+            not isinstance(observation_space, spaces.Dict)
+            or "actions" not in observation_space.spaces
+        ):
+            raise ValueError(
+                "MaskablePointerPolicy needs a Dict observation space with 'state' and 'actions'"
+            )
+        self.action_feat_dim = int(observation_space["actions"].shape[1])  # type: ignore
         self.action_embed_dim = action_embed_dim
         kwargs.setdefault("features_extractor_class", StateExtractor)
         # the head reads obs["actions"] directly, so a second, unshared
@@ -123,7 +130,9 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
             for module, gain in module_gains.items():
                 module.apply(partial(self.init_weights, gain=gain))
 
-        self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
+        self.optimizer = self.optimizer_class(
+            self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs  # type: ignore
+        )
 
     def _get_constructor_parameters(self) -> dict[str, Any]:
         """Adds `action_embed_dim` to the params SB3 needs to rebuild this policy."""
@@ -133,7 +142,9 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
 
     # head
 
-    def _action_logits(self, latent_pi: th.Tensor, action_feats: th.Tensor, action_masks=None) -> th.Tensor:
+    def _action_logits(
+        self, latent_pi: th.Tensor, action_feats: th.Tensor, action_masks=None
+    ) -> th.Tensor:
         """Scores every candidate action against the state.
 
         Given a mask, only the live candidates are embedded at all. The
@@ -149,15 +160,23 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
             scores = th.einsum("bad,bd->ba", embedded, query) * self._logit_scale
             return scores + self.action_bias(embedded).squeeze(-1)
 
-        live = th.as_tensor(action_masks, dtype=th.bool, device=query.device).reshape(action_feats.shape[:2])
+        live = th.as_tensor(action_masks, dtype=th.bool, device=query.device).reshape(
+            action_feats.shape[:2]
+        )
         embedded = self.action_encoder(action_feats[live])  # (live, dim)
         queries = query.unsqueeze(1).expand(-1, action_feats.shape[1], -1)[live]
-        scores = (embedded * queries).sum(-1) * self._logit_scale + self.action_bias(embedded).squeeze(-1)
-        return th.zeros(live.shape, dtype=scores.dtype, device=scores.device).masked_scatter(live, scores)
+        scores = (embedded * queries).sum(-1) * self._logit_scale + self.action_bias(
+            embedded
+        ).squeeze(-1)
+        return th.zeros(
+            live.shape, dtype=scores.dtype, device=scores.device
+        ).masked_scatter(live, scores)
 
-    def _distribution(self, latent_pi: th.Tensor, obs: PyTorchObs, action_masks: np.ndarray | None) -> MaskableDistribution:
+    def _distribution(
+        self, latent_pi: th.Tensor, obs: PyTorchObs, action_masks: np.ndarray | None
+    ) -> MaskableDistribution:
         """Builds the masked action distribution for one state."""
-        logits = self._action_logits(latent_pi, obs["actions"], action_masks)
+        logits = self._action_logits(latent_pi, obs["actions"], action_masks)  # type: ignore
         distribution = self.action_dist.proba_distribution(action_logits=logits)
         if action_masks is not None:
             distribution.apply_masking(action_masks)
@@ -165,7 +184,12 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
 
     # overrides that would otherwise go through `action_net`
 
-    def forward(self, obs: PyTorchObs, deterministic: bool = False, action_masks: np.ndarray | None = None):
+    def forward(
+        self,
+        obs: PyTorchObs,
+        deterministic: bool = False,
+        action_masks: np.ndarray | None = None,
+    ):
         """Samples an action and returns it with its value estimate and log probability."""
         features = self.extract_features(obs)
         latent_pi, latent_vf = self.mlp_extractor(features)
@@ -173,30 +197,43 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
         distribution = self._distribution(latent_pi, obs, action_masks)
         actions = distribution.get_actions(deterministic=deterministic)
         log_prob = distribution.log_prob(actions)
-        return actions.reshape((-1, *self.action_space.shape)), values, log_prob
+        return actions.reshape((-1, *self.action_space.shape)), values, log_prob  # type: ignore
 
-    def evaluate_actions(self, obs: PyTorchObs, actions: th.Tensor, action_masks: np.ndarray | None = None):
+    def evaluate_actions(  # type: ignore
+        self,
+        obs: PyTorchObs,
+        actions: th.Tensor,
+        action_masks: np.ndarray | None = None,
+    ):
         """Scores given actions under the current policy, for the PPO loss."""
         features = self.extract_features(obs)
         latent_pi, latent_vf = self.mlp_extractor(features)
         distribution = self._distribution(latent_pi, obs, action_masks)
-        return self.value_net(latent_vf), distribution.log_prob(actions), distribution.entropy()
+        return (
+            self.value_net(latent_vf),
+            distribution.log_prob(actions),
+            distribution.entropy(),
+        )
 
-    def get_distribution(self, obs: PyTorchObs, action_masks: np.ndarray | None = None) -> MaskableDistribution:
+    def get_distribution(
+        self, obs: PyTorchObs, action_masks: np.ndarray | None = None
+    ) -> MaskableDistribution:
         """The action distribution for one observation, without a value estimate."""
-        features = super(MaskableActorCriticPolicy, self).extract_features(obs, self.pi_features_extractor)
+        features = super(MaskableActorCriticPolicy, self).extract_features(
+            obs, self.pi_features_extractor
+        )
         latent_pi = self.mlp_extractor.forward_actor(features)
         return self._distribution(latent_pi, obs, action_masks)
 
     def predict_values(self, obs: PyTorchObs) -> th.Tensor:
         """The value estimate for one observation, without an action distribution."""
-        features = super(MaskableActorCriticPolicy, self).extract_features(obs, self.vf_features_extractor)
+        features = super(MaskableActorCriticPolicy, self).extract_features(
+            obs, self.vf_features_extractor
+        )
         return self.value_net(self.mlp_extractor.forward_critic(features))
 
 
-# ---------------------------------------------------------------------------
 # numpy inference copy
-# ---------------------------------------------------------------------------
 
 
 def _linear_stack(module: nn.Module) -> list[tuple[np.ndarray, np.ndarray, bool]]:
@@ -212,7 +249,10 @@ def _linear_stack(module: nn.Module) -> list[tuple[np.ndarray, np.ndarray, bool]
         if isinstance(child, nn.Linear):
             if pending is not None:
                 layers.append((*pending, False))
-            pending = (child.weight.detach().cpu().numpy().T.copy(), child.bias.detach().cpu().numpy().copy())
+            pending = (
+                child.weight.detach().cpu().numpy().T.copy(),
+                child.bias.detach().cpu().numpy().copy(),
+            )
         elif isinstance(child, nn.Tanh):
             assert pending is not None, "activation before any linear layer"
             layers.append((*pending, True))
@@ -226,7 +266,9 @@ def _linear_stack(module: nn.Module) -> list[tuple[np.ndarray, np.ndarray, bool]
     return layers
 
 
-def _apply(x: np.ndarray, layers: list[tuple[np.ndarray, np.ndarray, bool]]) -> np.ndarray:
+def _apply(
+    x: np.ndarray, layers: list[tuple[np.ndarray, np.ndarray, bool]]
+) -> np.ndarray:
     """Runs `x` through a flattened linear/tanh stack from `_linear_stack`."""
     for weight, bias, tanh in layers:
         x = x @ weight + bias
@@ -244,7 +286,15 @@ class NumpyPointerPolicy:
     per-call dispatch overhead on batch-of-one observations.
     """
 
-    def __init__(self, trunk, query, encoder, bias, scale: float, rng: np.random.Generator | None = None):
+    def __init__(
+        self,
+        trunk,
+        query,
+        encoder,
+        bias,
+        scale: float,
+        rng: np.random.Generator | None = None,
+    ):
         """Wraps already-flattened weight stacks; use `from_model` in practice."""
         self.trunk = trunk
         self.query = query
@@ -254,7 +304,9 @@ class NumpyPointerPolicy:
         self.rng = rng or np.random.default_rng()
 
     @classmethod
-    def from_model(cls, model, rng: np.random.Generator | None = None) -> "NumpyPointerPolicy":
+    def from_model(
+        cls, model, rng: np.random.Generator | None = None
+    ) -> "NumpyPointerPolicy":
         """Builds a numpy copy from a trained SB3 model's weights."""
         policy = getattr(model, "policy", model)
         if not isinstance(policy, MaskablePointerPolicy):
@@ -265,6 +317,7 @@ class NumpyPointerPolicy:
                 query=_linear_stack(policy.query_net),
                 encoder=_linear_stack(policy.action_encoder),
                 bias=_linear_stack(policy.action_bias),
+                # pylint: disable=protected-access
                 scale=policy._logit_scale,
                 rng=rng,
             )

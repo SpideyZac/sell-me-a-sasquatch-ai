@@ -30,10 +30,10 @@ from __future__ import annotations
 
 from typing import Iterable, Sequence
 
-import numpy as np
-from gymnasium import spaces
+import numpy as np  # type: ignore
+from gymnasium import spaces  # type: ignore
 
-from . import _native as native
+from . import _native as native  # type: ignore
 
 # observation layout, straight from the Rust encoder
 OBS_LEN: int = native.OBS_LEN
@@ -78,7 +78,9 @@ _FEATURE_LIMIT = 4.0
 """Declared bound on every observation and action feature."""
 
 
-def max_legal_actions(deck: "native.Deck", player_counts: Iterable[int] = ALL_PLAYER_COUNTS) -> int:
+def max_legal_actions(
+    deck: "native.Deck", player_counts: Iterable[int] = ALL_PLAYER_COUNTS
+) -> int:
     """Widest action space any of `player_counts` needs with this deck.
 
     Sizing the space from the deck (rather than a hand-audited constant)
@@ -100,12 +102,19 @@ def observation_space(max_actions: int, with_action_mask: bool = False) -> space
     of the policy's input there.
     """
     fields = {
-        "state": spaces.Box(low=-_FEATURE_LIMIT, high=_FEATURE_LIMIT, shape=(OBS_LEN,), dtype=np.float32),
-        "actions": spaces.Box(low=-_FEATURE_LIMIT, high=_FEATURE_LIMIT, shape=(max_actions, ACTION_FEAT_LEN), dtype=np.float32),
+        "state": spaces.Box(
+            low=-_FEATURE_LIMIT, high=_FEATURE_LIMIT, shape=(OBS_LEN,), dtype=np.float32
+        ),
+        "actions": spaces.Box(
+            low=-_FEATURE_LIMIT,
+            high=_FEATURE_LIMIT,
+            shape=(max_actions, ACTION_FEAT_LEN),
+            dtype=np.float32,
+        ),
     }
     if with_action_mask:
-        fields["action_mask"] = spaces.MultiBinary(max_actions)
-    return spaces.Dict(fields)
+        fields["action_mask"] = spaces.MultiBinary(max_actions)  # type: ignore
+    return spaces.Dict(fields)  # type: ignore
 
 
 def action_space(max_actions: int) -> spaces.Discrete:
@@ -113,7 +122,9 @@ def action_space(max_actions: int) -> spaces.Discrete:
     return spaces.Discrete(max_actions)
 
 
-def action_mask(legal_count: int, max_actions: int, out: np.ndarray | None = None) -> np.ndarray:
+def action_mask(
+    legal_count: int, max_actions: int, out: np.ndarray | None = None
+) -> np.ndarray:
     """The ordinal encoding makes every mask a prefix of ones, so this is a
     fill rather than a per-action test."""
     if out is None:
@@ -147,7 +158,9 @@ def empty_observation(max_actions: int) -> dict[str, np.ndarray]:
     }
 
 
-def encode_for_player(game, player: int, max_actions: int, persona: np.ndarray | None = None):
+def encode_for_player(
+    game, player: int, max_actions: int, persona: np.ndarray | None = None
+):
     """One-call observation for `player`, for callers outside the training
     loop (the web app, evaluation, ad-hoc analysis).
 

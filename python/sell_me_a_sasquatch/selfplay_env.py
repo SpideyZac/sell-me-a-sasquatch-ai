@@ -27,10 +27,10 @@ from __future__ import annotations
 
 from typing import Callable, Optional, Sequence
 
-import gymnasium as gym
-import numpy as np
+import gymnasium as gym  # type: ignore
+import numpy as np  # type: ignore
 
-from . import _native as native
+from . import _native as native  # type: ignore
 from . import spaces as sasquatch_spaces
 from .env import DEFAULT_DECK_PATH, RewardFn, default_reward_fn, load_deck
 
@@ -44,7 +44,7 @@ bytes is a real cost at hundreds of thousands of micro-steps per second.
 """
 
 
-def random_masked_policy(obs: dict, mask: np.ndarray, legal_count: int) -> int:
+def random_masked_policy(_obs: dict, _mask: np.ndarray, legal_count: int) -> int:
     """Uniform over legal actions - the baseline opponent."""
     return int(np.random.randint(legal_count)) if legal_count else 0
 
@@ -68,7 +68,12 @@ class OpponentPool:
       game rather than a different opponent every action.
     """
 
-    def __init__(self, current_prob: float = 0.5, max_snapshots: int = 10, rng: np.random.Generator | None = None):
+    def __init__(
+        self,
+        current_prob: float = 0.5,
+        max_snapshots: int = 10,
+        rng: np.random.Generator | None = None,
+    ):
         """Builds an empty pool; call `add_snapshot` to populate it."""
         self.model = None  # set externally once the live model exists, chicken-and-egg at construction
         self.snapshots: list = []
@@ -99,7 +104,9 @@ class OpponentPool:
 
     def new_episode(self) -> None:
         """Draws this episode's opponent identity: the live model or a random snapshot."""
-        if self.snapshots and (self.model is None or self.rng.random() >= self.current_prob):
+        if self.snapshots and (
+            self.model is None or self.rng.random() >= self.current_prob
+        ):
             self._active = self.snapshots[self.rng.integers(len(self.snapshots))]
         else:
             self._active = self.model
@@ -127,7 +134,7 @@ class SasquatchSelfPlayEnv(gym.Env):
     that offers first sees a different game from the one that offers last.
     """
 
-    metadata = {"render_modes": []}
+    metadata = {"render_modes": []}  # type: ignore
     """Gymnasium metadata: this env supports no render modes."""
 
     def __init__(
@@ -152,7 +159,9 @@ class SasquatchSelfPlayEnv(gym.Env):
         self.opponent_policy = opponent_policy or random_masked_policy
         self.learner_seat_mode = learner_seat
         self.reward_fn = reward_fn or default_reward_fn
-        self.max_actions = max_actions or sasquatch_spaces.max_legal_actions(self.deck, self.players)
+        self.max_actions = max_actions or sasquatch_spaces.max_legal_actions(
+            self.deck, self.players
+        )
 
         self.observation_space = sasquatch_spaces.observation_space(self.max_actions)
         self.action_space = sasquatch_spaces.action_space(self.max_actions)
@@ -160,7 +169,9 @@ class SasquatchSelfPlayEnv(gym.Env):
         self._game: native.Game | None = None
         self._num_players = self.players[0]
         self._learner: int = 0
-        self._personas = np.zeros((sasquatch_spaces.MAX_PLAYERS, sasquatch_spaces.NOISE_LEN), dtype=np.float32)
+        self._personas = np.zeros(
+            (sasquatch_spaces.MAX_PLAYERS, sasquatch_spaces.NOISE_LEN), dtype=np.float32
+        )
         self._prev_tokens: Sequence[int] = [0] * self._num_players
         self._mask = np.zeros(self.max_actions, dtype=np.int8)
         # mirrors _mask. the encoder already returns the legal count, so
@@ -199,16 +210,20 @@ class SasquatchSelfPlayEnv(gym.Env):
         super().reset(seed=seed)
         self._num_players = int(self.np_random.choice(self.players))
         self._learner = (
-            int(self.np_random.integers(0, self._num_players)) if self.learner_seat_mode == "random" else int(self.learner_seat_mode)
+            int(self.np_random.integers(0, self._num_players))
+            if self.learner_seat_mode == "random"
+            else int(self.learner_seat_mode)
         )
         self._learner %= self._num_players
         game_seed = int(self.np_random.integers(0, 2**63 - 1))
         self._game = native.Game(self._num_players, self.deck, game_seed)
-        self._personas[: self._num_players] = sasquatch_spaces.sample_personas(self.np_random, self._num_players)
+        self._personas[: self._num_players] = sasquatch_spaces.sample_personas(
+            self.np_random, self._num_players
+        )
         self._prev_tokens = [0] * self._num_players
 
         if hasattr(self.opponent_policy, "new_episode"):
-            self.opponent_policy.new_episode()
+            self.opponent_policy.new_episode()  # type: ignore
 
         reward = self._play_opponent_turns()
         obs = self._observe(self._learner)
@@ -226,17 +241,25 @@ class SasquatchSelfPlayEnv(gym.Env):
             # illegal actions default to masking, not raising, so fail
             # soft onto a legal move
             idx = 0
-        done, winner = self._game.step_index(self._learner, idx)
+        done, winner = self._game.step_index(self._learner, idx)  # type: ignore
         reward = self._carried_reward + self._reward(winner if done else None)
         self._carried_reward = 0.0
 
         if not done:
             reward += self._play_opponent_turns()
-            done = self._game.is_game_over()
-            winner = self._game.winner()
+            done = self._game.is_game_over()  # type: ignore
+            winner = self._game.winner()  # type: ignore
 
         obs = self._observe(self._learner)
-        info = {"winner": winner, "num_players": self._num_players, "learner_seat": self._learner} if done else {}
+        info = (
+            {
+                "winner": winner,
+                "num_players": self._num_players,
+                "learner_seat": self._learner,
+            }
+            if done
+            else {}
+        )
         return obs, reward, done, False, info
 
     def render(self):
@@ -251,7 +274,7 @@ class SasquatchSelfPlayEnv(gym.Env):
         the live model object (see `scripts/train.py`)."""
         if not isinstance(self.opponent_policy, OpponentPool):
             return
-        from sb3_contrib import MaskablePPO
+        from sb3_contrib import MaskablePPO  # type: ignore
 
         self.opponent_policy.add_snapshot(MaskablePPO.load(path, device="cpu"))
 
@@ -266,7 +289,7 @@ class SasquatchSelfPlayEnv(gym.Env):
         training loop, which keeps it in a rollout buffer.
         """
         state, actions = self._scratch["state"], self._scratch["actions"]
-        legal_count = self._game.encode(player, state, actions)
+        legal_count = self._game.encode(player, state, actions)  # type: ignore
         state[sasquatch_spaces.NOISE_OFFSET :] = self._personas[player]
         if legal_count != self._legal_count:
             sasquatch_spaces.action_mask(legal_count, self.max_actions, out=self._mask)
@@ -277,7 +300,7 @@ class SasquatchSelfPlayEnv(gym.Env):
 
     def _reward(self, winner: Optional[int]) -> float:
         """The learner's reward for the just-applied step."""
-        tokens = self._game.point_tokens()
+        tokens = self._game.point_tokens()  # type: ignore
         reward = self.reward_fn(self._prev_tokens, tokens, self._learner, winner)
         self._prev_tokens = tokens
         return reward
@@ -296,11 +319,11 @@ class SasquatchSelfPlayEnv(gym.Env):
         game = self._game
         total = 0.0
         while True:
-            active = game.active_player()
+            active = game.active_player()  # type: ignore
             if active is None or active == self._learner:
                 break
             obs = self._observe(active, copy=False)
             action = int(self.opponent_policy(obs, self._mask, self._legal_count))
-            game.step_index(active, action if 0 <= action < self._legal_count else 0)
-            total += self._reward(game.winner() if game.is_game_over() else None)
+            game.step_index(active, action if 0 <= action < self._legal_count else 0)  # type: ignore
+            total += self._reward(game.winner() if game.is_game_over() else None)  # type: ignore
         return total

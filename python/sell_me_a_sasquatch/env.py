@@ -21,14 +21,16 @@ import functools
 import os
 from typing import Callable, Optional, Sequence
 
-import numpy as np
-from pettingzoo import AECEnv
-from pettingzoo.utils import wrappers
+import numpy as np  # type: ignore
+from pettingzoo import AECEnv  # type: ignore
+from pettingzoo.utils import wrappers  # type: ignore
 
-from . import _native as native
+from . import _native as native  # type: ignore
 from . import spaces as sasquatch_spaces
 
-DEFAULT_DECK_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "configs", "deck.toml"))
+DEFAULT_DECK_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "configs", "deck.toml")
+)
 """Path to the confirmed real deck config, used when no other deck is given."""
 
 _DECK_CACHE: dict[str, "native.Deck"] = {}
@@ -43,12 +45,12 @@ def load_deck(deck: "str | native.Deck" = DEFAULT_DECK_PATH) -> "native.Deck":
     episode's total cost. Passing an already-loaded `Deck` through unchanged
     keeps callers that manage their own deck honest.
     """
-    if isinstance(deck, native.Deck):
+    if isinstance(deck, native.Deck):  # pylint: disable=c-extension-no-member
         return deck
     path = os.path.normpath(deck)
     cached = _DECK_CACHE.get(path)
     if cached is None:
-        cached = native.Deck(path)
+        cached = native.Deck(path)  # pylint: disable=c-extension-no-member
         _DECK_CACHE[path] = cached
     return cached
 
@@ -82,7 +84,10 @@ def lead_margin(tokens: Sequence[int], player_id: int) -> int:
 
 
 def default_reward_fn(
-    prev_tokens: Sequence[int], tokens: Sequence[int], player_id: int, winner: Optional[int]
+    prev_tokens: Sequence[int],
+    tokens: Sequence[int],
+    player_id: int,
+    winner: Optional[int],
 ) -> float:
     """+1 to the winner and -1 to everyone else at game end (the sparse
     ground-truth objective), plus a potential-based dense shaping term
@@ -102,7 +107,7 @@ def default_reward_fn(
     return float(shaped + terminal)
 
 
-class SasquatchAECEnv(AECEnv):
+class SasquatchAECEnv(AECEnv):  # pylint: disable=abstract-method
     """`Sell Me a Sasquatch` as a PettingZoo `AECEnv`.
 
     Three to six players use buyer mode; exactly two players automatically
@@ -122,7 +127,9 @@ class SasquatchAECEnv(AECEnv):
         max_actions: int | None = None,
     ):
         super().__init__()
-        if not (sasquatch_spaces.MIN_PLAYERS <= num_players <= sasquatch_spaces.MAX_PLAYERS):
+        if not (
+            sasquatch_spaces.MIN_PLAYERS <= num_players <= sasquatch_spaces.MAX_PLAYERS
+        ):
             raise ValueError(f"num_players must be 2..=6, got {num_players}")
         self.num_players = num_players
         self.deck = load_deck(deck_config_path)
@@ -137,17 +144,21 @@ class SasquatchAECEnv(AECEnv):
 
         self._game: native.Game | None = None
         self._prev_tokens: Sequence[int] = [0] * num_players
-        self._personas = np.zeros((num_players, sasquatch_spaces.NOISE_LEN), dtype=np.float32)
+        self._personas = np.zeros(
+            (num_players, sasquatch_spaces.NOISE_LEN), dtype=np.float32
+        )
 
     # Gymnasium/PettingZoo space plumbing
 
-    @functools.lru_cache(maxsize=None)
-    def observation_space(self, agent):
+    @functools.lru_cache(maxsize=None)  # pylint: disable=method-cache-max-size-none
+    def observation_space(self, agent):  # type: ignore
         """This agent's observation space, identical for every agent."""
-        return sasquatch_spaces.observation_space(self.max_actions, with_action_mask=True)
+        return sasquatch_spaces.observation_space(
+            self.max_actions, with_action_mask=True
+        )
 
-    @functools.lru_cache(maxsize=None)
-    def action_space(self, agent):
+    @functools.lru_cache(maxsize=None)  # pylint: disable=method-cache-max-size-none
+    def action_space(self, agent):  # type: ignore
         """This agent's action space, identical for every agent."""
         return sasquatch_spaces.action_space(self.max_actions)
 
@@ -158,7 +169,9 @@ class SasquatchAECEnv(AECEnv):
         rng = np.random.default_rng(seed)
         if seed is None:
             seed = int(rng.integers(0, 2**63 - 1))
-        self._game = native.Game(self.num_players, self.deck, int(seed))
+        self._game = native.Game(
+            self.num_players, self.deck, int(seed)
+        )  # pylint: disable=c-extension-no-member
 
         self.agents = self.possible_agents[:]
         self.rewards = {a: 0.0 for a in self.agents}
@@ -176,7 +189,7 @@ class SasquatchAECEnv(AECEnv):
         if not self.agents:
             self.agent_selection = None
             return
-        active = self._game.active_player()
+        active = self._game.active_player()  # type: ignore
         if active is None:
             # the game ends for the whole table at once, not one agent at a
             # time. per pettingzoo's _was_dead_step convention each agent
@@ -191,7 +204,10 @@ class SasquatchAECEnv(AECEnv):
         """Applies one action for the currently selected agent."""
         if not self.agents:
             return
-        if self.terminations[self.agent_selection] or self.truncations[self.agent_selection]:
+        if (
+            self.terminations[self.agent_selection]
+            or self.truncations[self.agent_selection]
+        ):
             self._was_dead_step(action)
             return
 
@@ -199,18 +215,23 @@ class SasquatchAECEnv(AECEnv):
         player_id = self.agent_name_mapping[agent]
         self._cumulative_rewards[agent] = 0.0
 
-        legal_count = self._game.legal_action_count(player_id)
+        legal_count = self._game.legal_action_count(player_id)  # type: ignore
         idx = int(action)
         if not 0 <= idx < legal_count:
             # an out-of-range (masked-out) index is a policy bug, not a
             # rules violation. illegal actions default to masking, not
             # raising, so fail soft onto the first legal action
             idx = 0
-        done, winner = self._game.step_index(player_id, idx)
+        done, winner = self._game.step_index(player_id, idx)  # type: ignore
 
-        tokens = self._game.point_tokens()
+        tokens = self._game.point_tokens()  # type: ignore
         for a in self.agents:
-            self.rewards[a] = self.reward_fn(self._prev_tokens, tokens, self.agent_name_mapping[a], winner if done else None)
+            self.rewards[a] = self.reward_fn(
+                self._prev_tokens,
+                tokens,
+                self.agent_name_mapping[a],
+                winner if done else None,
+            )
         self._prev_tokens = tokens
         if done:
             for a in self.agents:
@@ -225,14 +246,14 @@ class SasquatchAECEnv(AECEnv):
         """This agent's current observation, including its action mask."""
         player_id = self.agent_name_mapping[agent]
         obs = sasquatch_spaces.empty_observation(self.max_actions)
-        legal_count = self._game.encode(player_id, obs["state"], obs["actions"])
+        legal_count = self._game.encode(player_id, obs["state"], obs["actions"])  # type: ignore
         obs["state"][sasquatch_spaces.NOISE_OFFSET :] = self._personas[player_id]
         obs["action_mask"] = sasquatch_spaces.action_mask(legal_count, self.max_actions)
         return obs
 
     def render(self):
         """Renders the current game state as text, or prints it in human mode."""
-        from . import render as render_module
+        from . import render as render_module  # pylint: disable=import-outside-toplevel
 
         if self.render_mode is None:
             return None
@@ -257,7 +278,10 @@ def env(
     order-enforcing / out-of-bounds wrappers."""
     internal_render_mode = render_mode if render_mode != "ansi" else "human"
     e = SasquatchAECEnv(
-        num_players=num_players, deck_config_path=deck_config_path, render_mode=internal_render_mode, reward_fn=reward_fn
+        num_players=num_players,
+        deck_config_path=deck_config_path,
+        render_mode=internal_render_mode,
+        reward_fn=reward_fn,
     )
     if render_mode == "ansi":
         e = wrappers.CaptureStdoutWrapper(e)

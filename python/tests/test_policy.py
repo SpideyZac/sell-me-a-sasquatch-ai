@@ -6,29 +6,41 @@ cleanly when it is not installed.
 
 import os
 
-import numpy as np
-import pytest
+import numpy as np  # type: ignore
+import pytest  # type: ignore
 
 pytest.importorskip("torch")
 pytest.importorskip("sb3_contrib")
 
-import torch as th  # noqa: E402
-from sb3_contrib import MaskablePPO  # noqa: E402
-from sb3_contrib.common.wrappers import ActionMasker  # noqa: E402
-from stable_baselines3.common.vec_env import DummyVecEnv  # noqa: E402
+import torch as th  # type: ignore  # noqa: E402
+from sb3_contrib import MaskablePPO  # type: ignore  # noqa: E402
+from sb3_contrib.common.wrappers import ActionMasker  # type: ignore  # noqa: E402
+from stable_baselines3.common.vec_env import DummyVecEnv  # type: ignore  # noqa: E402
 
-from sell_me_a_sasquatch.policy import MaskablePointerPolicy, NumpyPointerPolicy  # noqa: E402
-from sell_me_a_sasquatch.selfplay_env import SasquatchSelfPlayEnv, random_masked_policy  # noqa: E402
+from sell_me_a_sasquatch.policy import (
+    MaskablePointerPolicy,
+    NumpyPointerPolicy,
+)  # noqa: E402
+from sell_me_a_sasquatch.selfplay_env import (
+    SasquatchSelfPlayEnv,
+    random_masked_policy,
+)  # noqa: E402
 
-DECK_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "configs", "deck.toml"))
+DECK_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "configs", "deck.toml")
+)
 
 
 def make_model(players=(2, 4, 6), **kwargs):
     """Builds a small `MaskablePointerPolicy` model for fast tests."""
 
     def _factory():
-        env = SasquatchSelfPlayEnv(players=players, deck_config_path=DECK_PATH, opponent_policy=random_masked_policy)
-        return ActionMasker(env, lambda e: e.action_masks())
+        env = SasquatchSelfPlayEnv(
+            players=players,
+            deck_config_path=DECK_PATH,
+            opponent_policy=random_masked_policy,
+        )
+        return ActionMasker(env, lambda e: e.action_masks())  # type: ignore
 
     vec = DummyVecEnv([_factory])
     model = MaskablePPO(
@@ -57,14 +69,18 @@ def test_numpy_policy_matches_torch():
     """The numpy mirror exists purely for speed, so it has to be the same
     function, not merely a similar one."""
     model, vec = make_model()
-    env = vec.envs[0].env
+    env = vec.envs[0].env  # type: ignore
     obs, _ = env.reset(seed=3)
     mirror = NumpyPointerPolicy.from_model(model)
 
     tensor_obs, _ = model.policy.obs_to_tensor(obs)
     with th.no_grad():
-        latent_pi, _ = model.policy.mlp_extractor(model.policy.extract_features(tensor_obs))
-        torch_logits = model.policy._action_logits(latent_pi, tensor_obs["actions"])[0].numpy()
+        latent_pi, _ = model.policy.mlp_extractor(
+            model.policy.extract_features(tensor_obs)
+        )
+        torch_logits = model.policy._action_logits(latent_pi, tensor_obs["actions"])[  # type: ignore
+            0
+        ].numpy()
 
     np.testing.assert_allclose(mirror.logits(obs), torch_logits, rtol=1e-4, atol=1e-5)
     vec.close()
@@ -73,7 +89,7 @@ def test_numpy_policy_matches_torch():
 def test_numpy_policy_only_ever_returns_a_legal_action():
     """The numpy policy never picks an index outside the current legal count."""
     model, vec = make_model()
-    env = vec.envs[0].env
+    env = vec.envs[0].env  # type: ignore
     obs, _ = env.reset(seed=5)
     mirror = NumpyPointerPolicy.from_model(model, rng=np.random.default_rng(0))
     for _ in range(50):
@@ -96,7 +112,7 @@ def test_saved_model_round_trips(tmp_path):
     reloaded = MaskablePPO.load(path, device="cpu")
     assert reloaded.policy.action_embed_dim == model.policy.action_embed_dim
 
-    env = vec.envs[0].env
+    env = vec.envs[0].env  # type: ignore
     obs, _ = env.reset(seed=9)
     mask = env.action_masks()
     before, _ = model.predict(obs, action_masks=mask, deterministic=True)
@@ -108,8 +124,12 @@ def test_saved_model_round_trips(tmp_path):
 def test_action_features_distinguish_candidates():
     """The pointer head is only useful if candidates actually look different
     to it; identical rows would make every logit identical too."""
-    env = SasquatchSelfPlayEnv(players=4, deck_config_path=DECK_PATH, opponent_policy=random_masked_policy)
+    env = SasquatchSelfPlayEnv(
+        players=4, deck_config_path=DECK_PATH, opponent_policy=random_masked_policy
+    )
     obs, _ = env.reset(seed=13)
     rows = obs["actions"][: env.legal_count]
     assert env.legal_count > 1
-    assert len(np.unique(rows, axis=0)) == len(rows), "legal actions must have distinct feature rows"
+    assert len(np.unique(rows, axis=0)) == len(
+        rows
+    ), "legal actions must have distinct feature rows"

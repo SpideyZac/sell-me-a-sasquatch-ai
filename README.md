@@ -31,6 +31,14 @@ the engine runs every micro-step of every training episode.
 Re-run `maturin develop --release` after any change under `engine/` or
 `bindings/`.
 
+## Formatting
+
+```sh
+cargo +nightly fmt --all
+npx prettier --write .
+black .
+```
+
 ## Build and test
 
 ```sh
@@ -82,7 +90,7 @@ uv pip install -e ".[web]"
 uv run python webapp/app.py
 ```
 
-Then open http://127.0.0.1:5000/. Three modes: watch AI models play each
+Then open <http://127.0.0.1:5000/>. Three modes: watch AI models play each
 other, play against them yourself, or use the live advisor to get move
 recommendations for an actual physical game (nothing is dealt for you; you
 tell it what's on the table as it becomes visible, and the real engine

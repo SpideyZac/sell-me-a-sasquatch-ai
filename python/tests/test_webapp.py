@@ -10,7 +10,7 @@ import os
 import random
 import sys
 
-import pytest
+import pytest  # type: ignore
 
 pytest.importorskip("flask")
 
@@ -32,7 +32,9 @@ ALL_CLASSES = [
 
 def _load_app_module():
     """Loads `webapp/app.py` as a module, since it isn't part of an installed package."""
-    webapp_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "webapp"))
+    webapp_dir = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "..", "webapp")
+    )
     path = os.path.join(webapp_dir, "app.py")
     # app.py does bare "import card_display" / "live_game" / "models" (its
     # sibling modules), fine when run normally ("python webapp/app.py"
@@ -41,12 +43,12 @@ def _load_app_module():
     if webapp_dir not in sys.path:
         sys.path.insert(0, webapp_dir)
     spec = importlib.util.spec_from_file_location("sasquatch_webapp_app", path)
-    module = importlib.util.module_from_spec(spec)
+    module = importlib.util.module_from_spec(spec)  # type: ignore
     # flask's get_root_path() (used to locate templates/ and static/) looks
     # the module up in sys.modules by name; module_from_spec alone doesn't
     # register it there, only importlib's higher-level import machinery does
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    sys.modules[spec.name] = module  # type: ignore
+    spec.loader.exec_module(module)  # type: ignore
     return module
 
 
@@ -67,7 +69,15 @@ def test_index_page_loads(client):
 
 @pytest.mark.parametrize("num_players", [2, 3, 4, 5, 6])
 def test_watch_mode_full_game_via_random_policies(client, num_players):
-    resp = client.post("/api/games", json={"mode": "watch", "num_players": num_players, "seat_models": ["random"] * num_players, "seed": 11})
+    resp = client.post(
+        "/api/games",
+        json={
+            "mode": "watch",
+            "num_players": num_players,
+            "seat_models": ["random"] * num_players,
+            "seed": 11,
+        },
+    )
     assert resp.status_code == 200
     game_id = resp.get_json()["game_id"]
 
@@ -76,13 +86,22 @@ def test_watch_mode_full_game_via_random_policies(client, num_players):
         state = client.post(f"/api/games/{game_id}/advance").get_json()["state"]
         if state["is_game_over"]:
             break
-    assert state["is_game_over"], "watch-mode game did not finish in time"
-    assert 0 <= state["winner"] < num_players
-    assert len(state["hands"]) == num_players
+    assert state["is_game_over"], "watch-mode game did not finish in time"  # type: ignore
+    assert 0 <= state["winner"] < num_players  # type: ignore
+    assert len(state["hands"]) == num_players  # type: ignore
 
 
 def test_play_mode_full_game_via_random_policies(client):
-    resp = client.post("/api/games", json={"mode": "play", "num_players": 4, "human_seat": 2, "seat_models": ["random"] * 4, "seed": 22})
+    resp = client.post(
+        "/api/games",
+        json={
+            "mode": "play",
+            "num_players": 4,
+            "human_seat": 2,
+            "seat_models": ["random"] * 4,
+            "seed": 22,
+        },
+    )
     assert resp.status_code == 200
     state = resp.get_json()["state"]
     assert state["your_seat"] == 2
@@ -90,8 +109,12 @@ def test_play_mode_full_game_via_random_policies(client):
     for _ in range(300):
         if state["is_game_over"]:
             break
-        assert state["your_turn"], "human should always be the one needing to act when control returns"
-        act_resp = client.post(f"/api/games/{resp.get_json()['game_id']}/act", json={"action_index": 0})
+        assert state[
+            "your_turn"
+        ], "human should always be the one needing to act when control returns"
+        act_resp = client.post(
+            f"/api/games/{resp.get_json()['game_id']}/act", json={"action_index": 0}
+        )
         assert act_resp.status_code == 200
         state = act_resp.get_json()["state"]
 
@@ -100,7 +123,16 @@ def test_play_mode_full_game_via_random_policies(client):
 
 
 def test_play_mode_rejects_out_of_range_action(client):
-    resp = client.post("/api/games", json={"mode": "play", "num_players": 4, "human_seat": 0, "seat_models": ["random"] * 4, "seed": 5})
+    resp = client.post(
+        "/api/games",
+        json={
+            "mode": "play",
+            "num_players": 4,
+            "human_seat": 0,
+            "seat_models": ["random"] * 4,
+            "seed": 5,
+        },
+    )
     game_id = resp.get_json()["game_id"]
     bad = client.post(f"/api/games/{game_id}/act", json={"action_index": 99999})
     assert bad.status_code == 400
@@ -130,9 +162,14 @@ def _play_live_game_randomly(client, live_id, max_steps=8000):
                 local_supply[k] -= 1
             resp = client.post(f"/api/live/{live_id}/respond", json={"kinds": kinds})
         elif prompt["type"] == "reveal_kind":
-            resp = client.post(f"/api/live/{live_id}/respond", json={"kind": _pick_kind(supply)})
+            resp = client.post(
+                f"/api/live/{live_id}/respond", json={"kind": _pick_kind(supply)}
+            )
         elif prompt["type"] == "choose_action":
-            resp = client.post(f"/api/live/{live_id}/respond", json={"index": random.randrange(len(prompt["options"]))})
+            resp = client.post(
+                f"/api/live/{live_id}/respond",
+                json={"index": random.randrange(len(prompt["options"]))},
+            )
         else:
             raise AssertionError(f"unexpected prompt type: {prompt}")
         assert resp.status_code == 200, resp.get_json()
@@ -142,7 +179,15 @@ def _play_live_game_randomly(client, live_id, max_steps=8000):
 
 @pytest.mark.parametrize("num_players", [2, 3, 4, 5, 6])
 def test_live_game_full_playthrough(client, num_players):
-    resp = client.post("/api/live", json={"num_players": num_players, "human_seat": 1 % num_players, "seed": 99, "advisor_model": "random"})
+    resp = client.post(
+        "/api/live",
+        json={
+            "num_players": num_players,
+            "human_seat": 1 % num_players,
+            "seed": 99,
+            "advisor_model": "random",
+        },
+    )
     assert resp.status_code == 200
     live_id = resp.get_json()["live_id"]
     state = _play_live_game_randomly(client, live_id)
@@ -154,7 +199,10 @@ def test_live_game_full_playthrough(client, num_players):
 
 
 def test_live_game_starts_with_pin_hand_prompt(client):
-    resp = client.post("/api/live", json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"})
+    resp = client.post(
+        "/api/live",
+        json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"},
+    )
     state = resp.get_json()["state"]
     assert state["prompt"]["type"] == "pin_hand"
     assert state["prompt"]["context"] == "starting_hand"
@@ -167,12 +215,27 @@ def test_live_game_pinned_hand_names_match_what_you_entered(client):
     `deck.rs`); a nasty or thingamabob pinned to a different kind must not
     keep displaying its old, now-wrong name (e.g. showing "Trojan Horse"
     for a card you entered as some other nasty or thingamabob)."""
-    resp = client.post("/api/live", json={"num_players": 4, "human_seat": 0, "seed": 9, "advisor_model": "random"})
+    resp = client.post(
+        "/api/live",
+        json={"num_players": 4, "human_seat": 0, "seed": 9, "advisor_model": "random"},
+    )
     live_id = resp.get_json()["live_id"]
     # a deliberately card-varied starting hand so a stale name would be
     # observable regardless of what this seed's engine happened to deal
-    entered_kinds = ["Nasty:Trojan Horse", "Thingamabob:Platonic Isolator", "Creature:Medium", "Creature:Tiny", "Nasty:Loan Shark"]
-    expected_names = ["Trojan Horse", "Platonic Isolator", "Medium Creature", "Tiny Creature", "Loan Shark"]
+    entered_kinds = [
+        "Nasty:Trojan Horse",
+        "Thingamabob:Platonic Isolator",
+        "Creature:Medium",
+        "Creature:Tiny",
+        "Nasty:Loan Shark",
+    ]
+    expected_names = [
+        "Trojan Horse",
+        "Platonic Isolator",
+        "Medium Creature",
+        "Tiny Creature",
+        "Loan Shark",
+    ]
     resp = client.post(f"/api/live/{live_id}/respond", json={"kinds": entered_kinds})
     state = resp.get_json()["state"]
     assert [c["kind"] for c in state["hand"]] == entered_kinds
@@ -180,7 +243,10 @@ def test_live_game_pinned_hand_names_match_what_you_entered(client):
 
 
 def test_live_game_opponent_turns_hide_unrevealed_kinds(client):
-    resp = client.post("/api/live", json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"})
+    resp = client.post(
+        "/api/live",
+        json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"},
+    )
     live_id = resp.get_json()["live_id"]
     state = resp.get_json()["state"]
     kinds = [c["kind"] for c in state["hand"]]
@@ -191,12 +257,17 @@ def test_live_game_opponent_turns_hide_unrevealed_kinds(client):
     # combos must never leak a real card name before it's actually revealed)
     prompt = state["prompt"]
     if prompt["type"] == "choose_action" and not prompt["your_turn"]:
-        assert all("???" in o["label"] or "player_" in o["label"] for o in prompt["options"])
+        assert all(
+            "???" in o["label"] or "player_" in o["label"] for o in prompt["options"]
+        )
         assert not any("score" in o for o in prompt["options"])
 
 
 def test_live_game_advisor_scoring_only_on_your_own_turn(client):
-    resp = client.post("/api/live", json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"})
+    resp = client.post(
+        "/api/live",
+        json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"},
+    )
     live_id = resp.get_json()["live_id"]
     state = resp.get_json()["state"]
 
@@ -225,16 +296,23 @@ def test_live_game_advisor_scoring_only_on_your_own_turn(client):
                 local_supply[k] -= 1
             resp = client.post(f"/api/live/{live_id}/respond", json={"kinds": kinds})
         elif prompt["type"] == "reveal_kind":
-            resp = client.post(f"/api/live/{live_id}/respond", json={"kind": _pick_kind(supply)})
+            resp = client.post(
+                f"/api/live/{live_id}/respond", json={"kind": _pick_kind(supply)}
+            )
         else:
             break
         state = resp.get_json()["state"]
-    assert saw_your_turn, "should reach the human's own deal-offer turn within a few steps"
+    assert (
+        saw_your_turn
+    ), "should reach the human's own deal-offer turn within a few steps"
     assert saw_opponent_turn, "should also see at least one opponent's deal-offer turn"
 
 
 def test_live_game_rejects_wrong_prompt_payload(client):
-    resp = client.post("/api/live", json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"})
+    resp = client.post(
+        "/api/live",
+        json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"},
+    )
     live_id = resp.get_json()["live_id"]
     # current prompt is pin_hand, not choose_action
     bad = client.post(f"/api/live/{live_id}/respond", json={"index": 0})
@@ -248,9 +326,22 @@ def test_live_game_rejects_bad_num_players(client):
 
 
 def test_creature_cards_display_tier_only_name(client):
-    resp = client.post("/api/games", json={"mode": "watch", "num_players": 4, "seat_models": ["random"] * 4, "seed": 1})
+    resp = client.post(
+        "/api/games",
+        json={
+            "mode": "watch",
+            "num_players": 4,
+            "seat_models": ["random"] * 4,
+            "seed": 1,
+        },
+    )
     state = resp.get_json()["state"]
-    creature_names = {c["name"] for hand in state["hands"] for c in hand if c["kind"] and c["kind"].startswith("Creature:")}
+    creature_names = {
+        c["name"]
+        for hand in state["hands"]
+        for c in hand
+        if c["kind"] and c["kind"].startswith("Creature:")
+    }
     for name in creature_names:
         assert name.endswith(" Creature")
         assert name.split(" Creature")[0] in ("Giant", "Big", "Medium", "Tiny")

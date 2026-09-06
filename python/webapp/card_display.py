@@ -18,7 +18,11 @@ def display_name(game, card_id: int) -> str:
 
 def card_dict(game, card_id: int) -> dict:
     """A card's id, display name, and mechanical kind, as a plain dict."""
-    return {"id": card_id, "name": display_name(game, card_id), "kind": game.card_kind(card_id)}
+    return {
+        "id": card_id,
+        "name": display_name(game, card_id),
+        "kind": game.card_kind(card_id),
+    }
 
 
 def human_card_class_label(card_class: str) -> str:
@@ -59,20 +63,30 @@ def describe_action(game, action) -> str:
             removals = d["removals"]
             if not removals:
                 return f"Play {name} (discard, no removals)"
-            parts = "; ".join(f"remove {label(c)} from player_{s}'s deal" for s, c in removals)
+            parts = "; ".join(
+                f"remove {label(c)} from player_{s}'s deal" for s, c in removals
+            )
             return f"Play {name}: {parts}"
         if effect == "cryptozootic_expander":
-            return f"Play {name}: add {label(d['hand_card'])} to player_{d['target_deal']}'s deal (face down)"
+            return f"Play {name}: add {label(d['hand_card'])} to player_{d['target_deal']}'s deal (face down)"  # pylint: disable=line-too-long
         if effect == "spectroelectric_optimeter":
-            return f"Play {name}: reveal {label(d['target_card'])} in player_{d['target_deal']}'s deal"
+            return f"Play {name}: reveal {label(d['target_card'])} in player_{d['target_deal']}'s deal"  # pylint: disable=line-too-long
         return f"Play {name}"
     if t == "pass_thingamabob_window":
         return "Pass"
     if t == "choose_deal":
         return f"Choose player_{d['seller']}'s deal"
     if t == "respond_to_deal":
-        return "Reverse the deal (swap piles)" if d["reverse"] else "Accept the deal (keep your own pile)"
+        return (
+            "Reverse the deal (swap piles)"
+            if d["reverse"]
+            else "Accept the deal (keep your own pile)"
+        )
     if t == "resolve_nasty_penalty":
         taken = d["taken_cards"]
-        return "Take nothing (decline)" if not taken else f"Take: {', '.join(label(c) for c in taken)}"
+        return (
+            "Take nothing (decline)"
+            if not taken
+            else f"Take: {', '.join(label(c) for c in taken)}"
+        )
     return str(d)
