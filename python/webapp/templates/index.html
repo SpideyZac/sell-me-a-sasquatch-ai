@@ -16,7 +16,6 @@
     </nav>
   </header>
 
-  <!-- ===================== WATCH ===================== -->
   <section id="tab-watch" class="tab-panel active">
     <div class="setup" id="watch-setup">
       <label>Players
@@ -41,7 +40,6 @@
     </div>
   </section>
 
-  <!-- ===================== PLAY ===================== -->
   <section id="tab-play" class="tab-panel">
     <div class="setup" id="play-setup">
       <label>Players
@@ -65,32 +63,30 @@
     </div>
   </section>
 
-  <!-- ===================== ADVISOR ===================== -->
   <section id="tab-advisor" class="tab-panel">
-    <p class="disclaimer">Approximate: built from what you enter below, not a real game session - anything you
-      don't specify defaults to empty/neutral. Covers the deal-offer and choose-deal decisions.</p>
-
-    <h2>What should I offer?</h2>
-    <div class="setup">
-      <label>Players <select id="adv-deal-num-players">
-        <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
-      </select></label>
-      <label>Model <select id="adv-deal-model"></select></label>
-      <div id="adv-deal-hand" class="card-slots"></div>
-      <button id="adv-deal-go">Get advice</button>
+    <p class="disclaimer">A real game session, just like Play - hands, collections, deals, and the draw/discard
+      piles are all tracked exactly. Every option you can take is ranked by the advisor model, best first.</p>
+    <div class="setup" id="advisor-setup">
+      <label>Players
+        <select id="advisor-num-players">
+          <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
+        </select>
+      </label>
+      <label>Your seat <select id="advisor-human-seat"></select></label>
+      <div id="advisor-seat-models" class="seat-models"></div>
+      <label>Advisor model <select id="advisor-model"></select></label>
+      <label>Seed (optional) <input type="number" id="advisor-seed"></label>
+      <button id="advisor-start">Start</button>
     </div>
-    <div id="adv-deal-result" class="advisor-result"></div>
-
-    <h2>Which deal should I take?</h2>
-    <div class="setup">
-      <label>Players <select id="adv-choose-num-players">
-        <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
-      </select></label>
-      <label>Model <select id="adv-choose-model"></select></label>
-      <div id="adv-choose-sellers" class="seller-slots"></div>
-      <button id="adv-choose-go">Get advice</button>
+    <div class="game-view" id="advisor-view" hidden>
+      <button id="advisor-new">New game</button>
+      <div class="status" id="advisor-status"></div>
+      <div class="hand" id="advisor-hand"></div>
+      <div class="players" id="advisor-players"></div>
+      <div class="deals" id="advisor-deals"></div>
+      <div class="actions" id="advisor-actions"></div>
+      <div class="log" id="advisor-log"></div>
     </div>
-    <div id="adv-choose-result" class="advisor-result"></div>
   </section>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

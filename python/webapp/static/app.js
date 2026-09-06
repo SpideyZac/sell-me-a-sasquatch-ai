@@ -1,23 +1,15 @@
 // Vanilla JS, no build step. One page, three modes toggled by tab buttons.
 
 let MODELS = ["random"];
-let CARD_CLASSES = []; // [{value, label}]
 
 async function loadStaticData() {
-  const [modelsRes, classesRes] = await Promise.all([fetch("/api/models"), fetch("/api/card_classes")]);
+  const modelsRes = await fetch("/api/models");
   const modelsJson = await modelsRes.json();
-  const classesJson = await classesRes.json();
   MODELS = ["random", ...modelsJson.models];
-  CARD_CLASSES = classesJson.classes;
 }
 
 function modelOptionsHtml() {
   return MODELS.map((m) => `<option value="${m}">${m}</option>`).join("");
-}
-
-function cardClassOptionsHtml(includeEmpty) {
-  const empty = includeEmpty ? `<option value="">-- empty --</option>` : "";
-  return empty + CARD_CLASSES.map((c) => `<option value="${c.value}">${c.label}</option>`).join("");
 }
 
 function cardLabel(card) {
@@ -61,8 +53,6 @@ function collectSeatModels(container, numPlayers, humanSeat) {
   if (humanSeat !== undefined) seatModels[humanSeat] = "random"; // unused for the human's own seat
   return seatModels;
 }
-
-// ============================== WATCH ========================================
 
 let watchGameId = null;
 let watchAutoplayTimer = null;
@@ -159,14 +149,20 @@ function renderWatchState(state) {
   document.getElementById("watch-log").innerHTML = "<h3>Log</h3>" + state.log.map((l) => `<div>${l}</div>`).join("");
 }
 
-// ============================== PLAY =========================================
+// Both modes put a human in one seat with AI (or random) opponents in the
+// rest, backed by a real game session - so hands, collections, deals, and
+// the draw/discard piles are all tracked exactly by the engine. Advisor
+// additionally asks the server to rank the human's own legal actions with a
+// model (see `score`/`recommended` on each action below); Play does not.
 
-let playGameId = null;
+const seatedGames = {}; // prefix -> game_id
 
-function initPlay() {
-  const numSel = document.getElementById("play-num-players");
-  const seatSel = document.getElementById("play-human-seat");
-  const seatModelsDiv = document.getElementById("play-seat-models");
+function initSeatedGame(prefix, mode) {
+  const numSel = document.getElementById(`${prefix}-num-players`);
+  const seatSel = document.getElementById(`${prefix}-human-seat`);
+  const seatModelsDiv = document.getElementById(`${prefix}-seat-models`);
+  const advisorModelSel = mode === "advisor" ? document.getElementById(`${prefix}-model`) : null;
+  if (advisorModelSel) advisorModelSel.innerHTML = modelOptionsHtml();
 
   const refresh = () => {
     const n = parseInt(numSel.value, 10);
@@ -177,158 +173,84 @@ function initPlay() {
   seatSel.addEventListener("change", refresh);
   refresh();
 
-  document.getElementById("play-start").addEventListener("click", async () => {
+  document.getElementById(`${prefix}-start`).addEventListener("click", async () => {
     const numPlayers = parseInt(numSel.value, 10);
     const humanSeat = parseInt(seatSel.value, 10);
     const seatModels = collectSeatModels(seatModelsDiv, numPlayers, humanSeat);
-    const seed = document.getElementById("play-seed").value;
+    const seed = document.getElementById(`${prefix}-seed`).value;
+    const body = { mode, num_players: numPlayers, human_seat: humanSeat, seat_models: seatModels, seed: seed || null };
+    if (advisorModelSel) body.advisor_model = advisorModelSel.value;
     const res = await fetch("/api/games", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "play", num_players: numPlayers, human_seat: humanSeat, seat_models: seatModels, seed: seed || null }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (data.error) return alert(data.error);
-    playGameId = data.game_id;
-    document.getElementById("play-setup").hidden = true;
-    document.getElementById("play-view").hidden = false;
-    renderPlayState(data.state);
+    seatedGames[prefix] = data.game_id;
+    document.getElementById(`${prefix}-setup`).hidden = true;
+    document.getElementById(`${prefix}-view`).hidden = false;
+    renderSeatedGameState(prefix, data.state);
   });
 
-  document.getElementById("play-new").addEventListener("click", () => {
-    playGameId = null;
-    document.getElementById("play-setup").hidden = false;
-    document.getElementById("play-view").hidden = true;
+  document.getElementById(`${prefix}-new`).addEventListener("click", () => {
+    delete seatedGames[prefix];
+    document.getElementById(`${prefix}-setup`).hidden = false;
+    document.getElementById(`${prefix}-view`).hidden = true;
   });
 }
 
-async function playAct(actionIndex) {
-  const res = await fetch(`/api/games/${playGameId}/act`, {
+async function seatedGameAct(prefix, actionIndex) {
+  const res = await fetch(`/api/games/${seatedGames[prefix]}/act`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action_index: actionIndex }),
   });
   const data = await res.json();
   if (data.error) return alert(data.error);
-  renderPlayState(data.state);
+  renderSeatedGameState(prefix, data.state);
 }
 
-function renderPlayState(state) {
-  document.getElementById("play-status").innerHTML = `
+function actionButtonHtml(a) {
+  const badge = "score" in a ? ` <small>(score ${a.score})</small>` : "";
+  const star = a.recommended ? "★ " : "";
+  return `<button class="action-btn${a.recommended ? " recommended" : ""}" data-idx="${a.index}">${star}${a.label}${badge}</button>`;
+}
+
+function renderSeatedGameState(prefix, state) {
+  document.getElementById(`${prefix}-status`).innerHTML = `
     <b>You are:</b> player_${state.your_seat} &nbsp; <b>Phase:</b> ${state.phase} &nbsp;
-    <b>Turn leader:</b> player_${state.turn_leader}
+    <b>Turn leader:</b> player_${state.turn_leader} &nbsp;
+    <b>Draw pile:</b> ${state.draw_pile_len} &nbsp; <b>Discard pile:</b> ${state.discard_pile_len}
     ${state.is_game_over ? `<br><b class="winner">GAME OVER - winner: player_${state.winner}${state.winner === state.your_seat ? " (you win!)" : ""}</b>` : ""}
   `;
 
-  document.getElementById("play-hand").innerHTML =
+  document.getElementById(`${prefix}-hand`).innerHTML =
     `<h3>Your hand (${state.point_tokens[state.your_seat]} tokens)</h3>` + state.hand.map(cardLabel).join(", ");
 
-  document.getElementById("play-players").innerHTML =
+  document.getElementById(`${prefix}-players`).innerHTML =
     "<h3>Everyone's public info</h3>" +
     state.collections
       .map((c, p) => `<div class="player-card"><b>player_${p}</b> - ${state.point_tokens[p]} tokens - collection: ${c.map(cardLabel).join(", ") || "(empty)"}</div>`)
       .join("");
 
-  document.getElementById("play-deals").innerHTML =
+  document.getElementById(`${prefix}-deals`).innerHTML =
     "<h3>Active deals</h3>" +
     (state.deals.length
       ? state.deals.map((d) => `<div class="deal">seller=player_${d.seller}: revealed [${d.revealed.map(cardLabel).join(", ") || "none"}], ${d.num_hidden} hidden</div>`).join("")
       : "<div>none</div>");
 
-  const actionsDiv = document.getElementById("play-actions");
+  const actionsDiv = document.getElementById(`${prefix}-actions`);
   if (state.your_turn && !state.is_game_over) {
-    actionsDiv.innerHTML = "<h3>Your move</h3>" + state.legal_actions.map((a) => `<button class="action-btn" data-idx="${a.index}">${a.label}</button>`).join("");
-    actionsDiv.querySelectorAll(".action-btn").forEach((btn) => btn.addEventListener("click", () => playAct(parseInt(btn.dataset.idx, 10))));
+    actionsDiv.innerHTML = "<h3>Your move</h3>" + state.legal_actions.map(actionButtonHtml).join("");
+    actionsDiv.querySelectorAll(".action-btn").forEach((btn) => btn.addEventListener("click", () => seatedGameAct(prefix, parseInt(btn.dataset.idx, 10))));
   } else if (!state.is_game_over) {
     actionsDiv.innerHTML = "<h3>Waiting for other players...</h3>";
   } else {
     actionsDiv.innerHTML = "";
   }
 
-  document.getElementById("play-log").innerHTML = "<h3>Log</h3>" + state.log.map((l) => `<div>${l}</div>`).join("");
-}
-
-// ============================== ADVISOR ======================================
-
-function initAdvisorDealOffer() {
-  const modelSel = document.getElementById("adv-deal-model");
-  modelSel.innerHTML = modelOptionsHtml();
-
-  const handDiv = document.getElementById("adv-deal-hand");
-  handDiv.innerHTML = Array.from({ length: 5 }, (_, i) => `<label>Card ${i + 1} <select data-slot="${i}">${cardClassOptionsHtml(i >= 3)}</select></label>`).join("");
-
-  document.getElementById("adv-deal-go").addEventListener("click", async () => {
-    const numPlayers = parseInt(document.getElementById("adv-deal-num-players").value, 10);
-    const hand = Array.from(handDiv.querySelectorAll("select"))
-      .map((s) => s.value)
-      .filter((v) => v !== "");
-    if (hand.length < 3) return alert("Enter at least 3 cards.");
-    const res = await fetch("/api/advisor/deal_offer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hand, num_players: numPlayers, model: modelSel.value }),
-    });
-    const data = await res.json();
-    const resultDiv = document.getElementById("adv-deal-result");
-    if (data.error) {
-      resultDiv.innerHTML = `<p class="error">${data.error}</p>`;
-      return;
-    }
-    resultDiv.innerHTML = `
-      <p class="disclaimer">${data.disclaimer}</p>
-      <h3>Ranked deals to offer</h3>
-      <ol>${data.recommendations.map((r) => `<li>${r.cards.join(", ")} <small>(score ${r.score})</small></li>`).join("")}</ol>
-      ${data.reveal_recommendation ? `<p><b>For the top combo, reveal:</b> ${data.reveal_recommendation}</p>` : ""}
-    `;
-  });
-}
-
-function initAdvisorChooseDeal() {
-  const modelSel = document.getElementById("adv-choose-model");
-  modelSel.innerHTML = modelOptionsHtml();
-  const numSel = document.getElementById("adv-choose-num-players");
-  const sellersDiv = document.getElementById("adv-choose-sellers");
-
-  const refreshSellers = () => {
-    const n = parseInt(numSel.value, 10) - 1;
-    sellersDiv.innerHTML = Array.from(
-      { length: n },
-      (_, i) => `
-      <div class="seller-slot">
-        <b>Seller ${i + 1}</b>
-        <label>Revealed card <select data-seller="${i}" class="seller-revealed">${cardClassOptionsHtml(true)}</select></label>
-        <label>Hidden cards <input type="number" data-seller="${i}" class="seller-hidden" min="0" max="3" value="2"></label>
-      </div>`
-    ).join("");
-  };
-  numSel.addEventListener("change", refreshSellers);
-  refreshSellers();
-
-  document.getElementById("adv-choose-go").addEventListener("click", async () => {
-    const numPlayers = parseInt(numSel.value, 10);
-    const revealedSelects = Array.from(sellersDiv.querySelectorAll(".seller-revealed"));
-    const hiddenInputs = Array.from(sellersDiv.querySelectorAll(".seller-hidden"));
-    const sellers = revealedSelects.map((sel, i) => ({
-      revealed: sel.value ? [sel.value] : [],
-      num_hidden: parseInt(hiddenInputs[i].value, 10) || 0,
-    }));
-    const res = await fetch("/api/advisor/choose_deal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sellers, num_players: numPlayers, model: modelSel.value }),
-    });
-    const data = await res.json();
-    const resultDiv = document.getElementById("adv-choose-result");
-    if (data.error) {
-      resultDiv.innerHTML = `<p class="error">${data.error}</p>`;
-      return;
-    }
-    resultDiv.innerHTML = `
-      <p class="disclaimer">${data.disclaimer}</p>
-      <h3>Ranked sellers to choose</h3>
-      <ol>${data.recommendations.map((r) => `<li>Seller ${r.seller_slot + 1} <small>(score ${r.score})</small></li>`).join("")}</ol>
-    `;
-  });
+  document.getElementById(`${prefix}-log`).innerHTML = "<h3>Log</h3>" + state.log.map((l) => `<div>${l}</div>`).join("");
 }
 
 // boot
@@ -337,7 +259,6 @@ function initAdvisorChooseDeal() {
   await loadStaticData();
   setupTabs();
   initWatch();
-  initPlay();
-  initAdvisorDealOffer();
-  initAdvisorChooseDeal();
+  initSeatedGame("play", "play");
+  initSeatedGame("advisor", "advisor");
 })();

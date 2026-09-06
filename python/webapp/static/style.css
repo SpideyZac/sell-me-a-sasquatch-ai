@@ -52,10 +52,8 @@ select, input[type="number"] { padding: 0.3rem; }
 .actions { margin: 0.75rem 0; }
 .action-btn { display: block; margin: 0.25rem 0; text-align: left; width: 100%; background: #1a5fb4; }
 .action-btn:hover { background: #2a7fe4; }
-
-.card-slots, .seller-slots { display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%; }
-.seller-slot { border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; background: #fff; }
+.action-btn.recommended { background: #0a7d1e; }
+.action-btn.recommended:hover { background: #12a02a; }
 
 .disclaimer { font-size: 0.85rem; color: #666; font-style: italic; }
 .error { color: #b00020; }
-.advisor-result { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 0.75rem; margin-bottom: 1rem; min-height: 1.5rem; }
