@@ -1,0 +1,14 @@
+/target/
+**/target/
+python/.venv/
+python/**/__pycache__/
+python/**/*.egg-info/
+python/dist/
+python/build/
+python/sell_me_a_sasquatch/*.pyd
+python/sell_me_a_sasquatch/*.so
+python/sell_me_a_sasquatch/*.pdb
+*.pyc
+.pytest_cache/
+python/models/
+python/tb_logs/

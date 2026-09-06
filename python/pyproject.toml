@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "sell-me-a-sasquatch"
+version = "0.1.0"
+description = "Sell Me a Sasquatch: Rust game engine + PettingZoo multi-agent RL environment"
+requires-python = ">=3.10"
+dependencies = ["pettingzoo>=1.24", "gymnasium>=0.29", "numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+train = ["stable-baselines3>=2.3", "sb3-contrib>=2.3", "torch>=2.2", "tqdm>=4.66", "rich>=13.7"]
+web = ["flask>=3.0"]
+
+[tool.maturin]
+manifest-path = "../bindings/Cargo.toml"
+module-name = "sell_me_a_sasquatch._native"
+python-source = "."
+features = ["pyo3/extension-module"]

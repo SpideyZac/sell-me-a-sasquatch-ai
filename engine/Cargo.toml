@@ -1,0 +1,23 @@
+[package]
+name = "sasquatch-engine"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "sasquatch_engine"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+rand = "0.9"
+rand_chacha = "0.9"
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
+criterion = "0.5"
+
+[[bench]]
+name = "rollout"
+harness = false

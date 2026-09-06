@@ -1,0 +1,74 @@
+# Sell Me a Sasquatch — confirmed deck composition (120 cards total)
+# Creatures are fungible within a tier (no individual card behavior),
+# so they're modeled as tier-level pools, not named cards.
+#
+# This file is authoritative game data (verified against a physical copy).
+# Do not regenerate or "rebalance" these numbers.
+
+[[creature_tiers]]
+tier = "Giant"
+set_size = 1
+copies = 4
+
+[[creature_tiers]]
+tier = "Big"
+set_size = 2
+copies = 16
+
+[[creature_tiers]]
+tier = "Medium"
+set_size = 3
+copies = 25
+
+[[creature_tiers]]
+tier = "Tiny"
+set_size = 4
+copies = 20
+# Creature subtotal: 4 + 16 + 25 + 20 = 65
+
+[[nasties]]
+name = "Poison Pill Bug"
+set_size = 2
+copies = 10
+effect = "buyer_may_steal_up_to_1_card"
+
+[[nasties]]
+name = "Loan Shark"
+set_size = 2
+copies = 10
+effect = "buyer_may_steal_up_to_2_cards"
+
+[[nasties]]
+name = "Trojan Horse"
+set_size = 3
+copies = 12
+effect = "buyer_steals_1_point_token"
+# Nasties subtotal: 10 + 10 + 12 = 32
+
+[[thingamabobs]]
+name = "Platonic Isolator"
+copies = 3
+effect = "steal_point_token_from_richer_player"
+
+[[thingamabobs]]
+name = "Detrital Repositioner"
+copies = 6
+effect = "remove_1_card_from_1_deal"
+
+[[thingamabobs]]
+name = "Super Detrital Repositioner"
+copies = 3
+effect = "remove_up_to_2_cards_from_1_or_2_deals"
+
+[[thingamabobs]]
+name = "Cryptozooptic Expander"
+copies = 6
+effect = "add_hidden_hand_card_to_deal"
+
+[[thingamabobs]]
+name = "Spectroelectric Optimeter"
+copies = 5
+effect = "reveal_1_card_in_a_deal"
+# Thingamabob subtotal: 3 + 6 + 3 + 6 + 5 = 23
+
+# GRAND TOTAL: 65 + 32 + 23 = 120

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sell Me a Sasquatch - AI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>Sell Me a Sasquatch - AI</h1>
+    <nav>
+      <button class="tab-btn active" data-tab="watch">Watch AIs</button>
+      <button class="tab-btn" data-tab="play">Play vs AIs</button>
+      <button class="tab-btn" data-tab="advisor">Move Advisor</button>
+    </nav>
+  </header>
+
+  <!-- ===================== WATCH ===================== -->
+  <section id="tab-watch" class="tab-panel active">
+    <div class="setup" id="watch-setup">
+      <label>Players
+        <select id="watch-num-players">
+          <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
+        </select>
+      </label>
+      <div id="watch-seat-models" class="seat-models"></div>
+      <label>Seed (optional) <input type="number" id="watch-seed"></label>
+      <button id="watch-start">Start</button>
+    </div>
+    <div class="game-view" id="watch-view" hidden>
+      <div class="controls">
+        <button id="watch-step">Step</button>
+        <label><input type="checkbox" id="watch-autoplay"> Autoplay</label>
+        <button id="watch-new">New game</button>
+      </div>
+      <div class="status" id="watch-status"></div>
+      <div class="players" id="watch-players"></div>
+      <div class="deals" id="watch-deals"></div>
+      <div class="log" id="watch-log"></div>
+    </div>
+  </section>
+
+  <!-- ===================== PLAY ===================== -->
+  <section id="tab-play" class="tab-panel">
+    <div class="setup" id="play-setup">
+      <label>Players
+        <select id="play-num-players">
+          <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
+        </select>
+      </label>
+      <label>Your seat <select id="play-human-seat"></select></label>
+      <div id="play-seat-models" class="seat-models"></div>
+      <label>Seed (optional) <input type="number" id="play-seed"></label>
+      <button id="play-start">Start</button>
+    </div>
+    <div class="game-view" id="play-view" hidden>
+      <button id="play-new">New game</button>
+      <div class="status" id="play-status"></div>
+      <div class="hand" id="play-hand"></div>
+      <div class="players" id="play-players"></div>
+      <div class="deals" id="play-deals"></div>
+      <div class="actions" id="play-actions"></div>
+      <div class="log" id="play-log"></div>
+    </div>
+  </section>
+
+  <!-- ===================== ADVISOR ===================== -->
+  <section id="tab-advisor" class="tab-panel">
+    <p class="disclaimer">Approximate: built from what you enter below, not a real game session - anything you
+      don't specify defaults to empty/neutral. Covers the deal-offer and choose-deal decisions.</p>
+
+    <h2>What should I offer?</h2>
+    <div class="setup">
+      <label>Players <select id="adv-deal-num-players">
+        <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
+      </select></label>
+      <label>Model <select id="adv-deal-model"></select></label>
+      <div id="adv-deal-hand" class="card-slots"></div>
+      <button id="adv-deal-go">Get advice</button>
+    </div>
+    <div id="adv-deal-result" class="advisor-result"></div>
+
+    <h2>Which deal should I take?</h2>
+    <div class="setup">
+      <label>Players <select id="adv-choose-num-players">
+        <option>2</option><option selected>4</option><option>3</option><option>5</option><option>6</option>
+      </select></label>
+      <label>Model <select id="adv-choose-model"></select></label>
+      <div id="adv-choose-sellers" class="seller-slots"></div>
+      <button id="adv-choose-go">Get advice</button>
+    </div>
+    <div id="adv-choose-result" class="advisor-result"></div>
+  </section>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

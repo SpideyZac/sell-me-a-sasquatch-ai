@@ -1,0 +1,12 @@
+[package]
+name = "sasquatch-bindings"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "sasquatch_bindings"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sasquatch-engine = { path = "../engine" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
