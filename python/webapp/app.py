@@ -179,13 +179,16 @@ def api_new_game():
         return jsonify({"error": "mode must be 'watch' or 'play'"}), 400
     deck = body.get("deck") or DEFAULT_DECK_PATH
     seed = int(body["seed"]) if body.get("seed") not in (None, "") else random.randint(0, 2**63 - 1)
+    first_player = int(body["first_player"]) if body.get("first_player") not in (None, "") else None
+    if first_player is not None and not (0 <= first_player < num_players):
+        return jsonify({"error": "first_player out of range"}), 400
 
     seat_specs = body.get("seat_models") or ["random"] * num_players
     seat_specs = (seat_specs + ["random"] * num_players)[:num_players]
     human_seat = int(body["human_seat"]) if mode == "play" and body.get("human_seat") is not None else (0 if mode == "play" else None)
 
     try:
-        game = native.Game(num_players, deck, seed)
+        game = native.Game(num_players, deck, seed, first_player)
     except Exception as e:  # noqa: BLE001 - surface engine setup errors to the UI as-is
         return jsonify({"error": str(e)}), 400
 
@@ -270,9 +273,12 @@ def api_new_live_game():
     deck = body.get("deck") or DEFAULT_DECK_PATH
     seed = int(body["seed"]) if body.get("seed") not in (None, "") else random.randint(0, 2**63 - 1)
     advisor_model = body.get("advisor_model", "random")
+    first_player = int(body["first_player"]) if body.get("first_player") not in (None, "") else None
+    if first_player is not None and not (0 <= first_player < num_players):
+        return jsonify({"error": "first_player out of range"}), 400
 
     try:
-        session = LiveSession(num_players, human_seat, deck, seed, advisor_model)
+        session = LiveSession(num_players, human_seat, deck, seed, advisor_model, first_player)
     except LiveGameError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:  # noqa: BLE001 - surface engine/model setup errors to the UI as-is

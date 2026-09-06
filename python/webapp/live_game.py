@@ -45,8 +45,8 @@ class LiveGameError(Exception):
 
 
 class LiveSession:
-    def __init__(self, num_players: int, human_seat: int, deck_path: str, seed: int, advisor_model_spec: str):
-        self.game = native.Game(num_players, deck_path, seed)
+    def __init__(self, num_players: int, human_seat: int, deck_path: str, seed: int, advisor_model_spec: str, first_player: int | None = None):
+        self.game = native.Game(num_players, deck_path, seed, first_player)
         self.num_players = num_players
         self.human_seat = human_seat
         self.advisor_model_spec = advisor_model_spec
@@ -387,6 +387,10 @@ class LiveSession:
 
         if t == "submit_deal":
             return f"Offer deal: {', '.join(label(c) for c in d['cards'])}"
+        if t == "two_player_submit_deal":
+            own = ", ".join(label(c) for c in d["own_pile"]) or "nothing"
+            other = ", ".join(label(c) for c in d["other_pile"]) or "nothing"
+            return f"Split: keep [{own}], offer [{other}]"
         if t == "reveal_card":
             return f"Reveal {label(d['card'])}"
         if t == "buyer_peek":

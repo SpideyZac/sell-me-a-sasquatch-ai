@@ -1,7 +1,10 @@
-//! §2.7: the materially different 2-player flow. Note the flagged
-//! assumption in README - both players build a deal each turn, only the
-//! active player's gets a face-up reveal, and Accept/Reverse decides
-//! whether the two piles swap collections.
+//! §2.7: the materially different 2-player flow. Confirmed against the
+//! physical rulebook: on your turn you split exactly 3 of your *own* hand
+//! cards between "my pile" and "their pile" (any split summing to 3 - 3/0,
+//! 2/1, 1/2, 0/3), flip exactly one of those 3 cards face up yourself, and
+//! the other player then Accepts (each pile goes where it was placed) or
+//! Reverses (the two piles swap owners). Nasty-set trade-ins always let the
+//! *other* player (not whoever's set completed) decide what's taken.
 
 mod common;
 
@@ -24,47 +27,87 @@ fn both_players_start_with_a_5_card_hand() {
 }
 
 #[test]
-fn only_the_active_players_deal_gets_a_face_up_reveal() {
+fn only_the_active_player_acts_during_the_deal_split_and_reveal() {
     let mut game = new_test_game(2, 4);
     let active = game.turn_leader();
     let responder = 1 - active;
 
-    // Active player: submit then must reveal.
+    assert_eq!(game.current_phase(), "deal_offer_submit");
     assert_eq!(game.active_players(), vec![active]);
-    let submit = game.legal_actions(active).into_iter().next().unwrap();
-    game.apply_action(active, submit).unwrap();
+    let Action::TwoPlayerSubmitDeal { own_pile, other_pile } = game.legal_actions(active).into_iter().next().unwrap() else { panic!() };
+    assert_eq!(own_pile.len() + other_pile.len(), 3, "the split must always total 3 cards");
+    game.apply_action(active, Action::TwoPlayerSubmitDeal { own_pile, other_pile }).unwrap();
+
     assert_eq!(game.current_phase(), "deal_offer_reveal");
-    assert_eq!(game.active_players(), vec![active]);
+    assert_eq!(game.active_players(), vec![active], "only the active player reveals - never the responder");
     let reveal = game.legal_actions(active).into_iter().next().unwrap();
     assert!(matches!(reveal, Action::RevealCard { .. }));
-    game.apply_action(active, reveal).unwrap();
+    let events = game.apply_action(active, reveal).unwrap();
 
-    // Responder: submit only, straight into the Thingamabob window (no
-    // BuyerPeek phase exists in 2-player mode, and no reveal is required).
-    assert_eq!(game.current_phase(), "deal_offer_submit");
-    assert_eq!(game.active_players(), vec![responder]);
-    let submit = game.legal_actions(responder).into_iter().next().unwrap();
-    let events = game.apply_action(responder, submit).unwrap();
-    assert!(!events.iter().any(|e| matches!(e, Event::CardRevealed { .. })));
+    assert!(events.iter().any(|e| matches!(e, Event::CardRevealed { .. })));
     assert_eq!(game.current_phase(), "thingamabob_window");
     assert_eq!(game.active_players(), vec![active], "Thingamabob window starts with the active player");
+    assert_eq!(game.legal_actions(responder), vec![], "the responder never gets a deal-offer action of their own");
 }
 
 #[test]
-fn accept_keeps_each_piles_cards_with_its_own_maker() {
+fn every_split_size_is_offered_as_a_legal_action() {
+    let game = new_test_game(2, 7);
+    let active = game.turn_leader();
+    let mut sizes: Vec<(usize, usize)> =
+        game.legal_actions(active).into_iter().map(|a| { let Action::TwoPlayerSubmitDeal { own_pile, other_pile } = a else { panic!() }; (own_pile.len(), other_pile.len()) }).collect();
+    sizes.sort_unstable();
+    sizes.dedup();
+    assert_eq!(sizes, vec![(0, 3), (1, 2), (2, 1), (3, 0)]);
+}
+
+#[test]
+fn all_3_cards_come_from_the_active_players_own_hand() {
+    let mut game = new_test_game(2, 11);
+    let active = game.turn_leader();
+    let responder = 1 - active;
+    let responder_hand_before = game.player_hand(responder).to_vec();
+
+    let Action::TwoPlayerSubmitDeal { own_pile, other_pile } = game.legal_actions(active).into_iter().next().unwrap() else { panic!() };
+    let mut offered: Vec<_> = own_pile.iter().chain(other_pile.iter()).copied().collect();
+    offered.sort_unstable();
+
+    let mut active_hand_before: Vec<_> = game.player_hand(active).to_vec();
+    active_hand_before.sort_unstable();
+    for c in &offered {
+        assert!(active_hand_before.contains(c), "every offered card must come from the active player's own hand");
+    }
+
+    game.apply_action(active, Action::TwoPlayerSubmitDeal { own_pile, other_pile }).unwrap();
+    assert_eq!(game.player_hand(responder), responder_hand_before.as_slice(), "the responder's hand is never touched by the split");
+}
+
+#[test]
+fn accept_sends_each_pile_where_it_was_placed() {
     let mut game = new_test_game(2, 5);
     let active = game.turn_leader();
     let responder = 1 - active;
-    auto_play_deal_offers(&mut game);
+
+    // Force a genuine 2/1 split so both piles are non-empty and distinct.
+    let Action::TwoPlayerSubmitDeal { own_pile, other_pile } = game
+        .legal_actions(active)
+        .into_iter()
+        .find(|a| matches!(a, Action::TwoPlayerSubmitDeal { own_pile, other_pile } if own_pile.len() == 2 && other_pile.len() == 1))
+        .unwrap()
+    else {
+        panic!()
+    };
+    let (own_pile, other_pile) = (own_pile, other_pile);
+    game.apply_action(active, Action::TwoPlayerSubmitDeal { own_pile: own_pile.clone(), other_pile: other_pile.clone() }).unwrap();
+    let reveal = game.legal_actions(active).into_iter().next().unwrap();
+    game.apply_action(active, reveal).unwrap();
     auto_pass_thingamabob_window(&mut game);
-    assert_eq!(game.current_phase(), "respond_to_deal");
-    assert_eq!(game.active_players(), vec![responder]);
 
     let events = game.apply_action(responder, Action::RespondToDeal { reverse: false }).unwrap();
-    let awarded_to_active = events.iter().find_map(|e| if let Event::CardsAwarded { player, cards } = e { (*player == active).then(|| cards.len()) } else { None });
-    let awarded_to_responder = events.iter().find_map(|e| if let Event::CardsAwarded { player, cards } = e { (*player == responder).then(|| cards.len()) } else { None });
-    assert_eq!(awarded_to_active, Some(3));
-    assert_eq!(awarded_to_responder, Some(3));
+    let awarded_to_active = events.iter().find_map(|e| if let Event::CardsAwarded { player, cards } = e { (*player == active).then(|| cards.clone()) } else { None });
+    let awarded_to_responder = events.iter().find_map(|e| if let Event::CardsAwarded { player, cards } = e { (*player == responder).then(|| cards.clone()) } else { None });
+    assert_eq!(awarded_to_active.map(|mut c| { c.sort_unstable(); c }), Some({ let mut v = own_pile; v.sort_unstable(); v }));
+    assert_eq!(awarded_to_responder.map(|mut c| { c.sort_unstable(); c }), Some({ let mut v = other_pile; v.sort_unstable(); v }));
 }
 
 #[test]
@@ -73,24 +116,25 @@ fn reverse_swaps_the_two_piles_between_players() {
     let active = game.turn_leader();
     let responder = 1 - active;
 
-    // Track exactly which card ids each player submitted.
-    let active_submit = game.legal_actions(active).into_iter().next().unwrap();
-    let Action::SubmitDeal { cards: active_cards } = active_submit.clone() else { panic!() };
-    game.apply_action(active, active_submit).unwrap();
+    let Action::TwoPlayerSubmitDeal { own_pile, other_pile } = game
+        .legal_actions(active)
+        .into_iter()
+        .find(|a| matches!(a, Action::TwoPlayerSubmitDeal { own_pile, other_pile } if own_pile.len() == 2 && other_pile.len() == 1))
+        .unwrap()
+    else {
+        panic!()
+    };
+    game.apply_action(active, Action::TwoPlayerSubmitDeal { own_pile: own_pile.clone(), other_pile: other_pile.clone() }).unwrap();
     let reveal = game.legal_actions(active).into_iter().next().unwrap();
     game.apply_action(active, reveal).unwrap();
-    let responder_submit = game.legal_actions(responder).into_iter().next().unwrap();
-    let Action::SubmitDeal { cards: responder_cards } = responder_submit.clone() else { panic!() };
-    game.apply_action(responder, responder_submit).unwrap();
-
     auto_pass_thingamabob_window(&mut game);
     game.apply_action(responder, Action::RespondToDeal { reverse: true }).unwrap();
 
-    for c in active_cards {
-        assert!(game.player_collection(responder).contains(&c) || is_discarded_via_trade_in(&game, c), "active's card should land with responder on reverse");
+    for c in own_pile {
+        assert!(game.player_collection(responder).contains(&c) || is_discarded_via_trade_in(&game, c), "active's own-pile card should land with the responder on reverse");
     }
-    for c in responder_cards {
-        assert!(game.player_collection(active).contains(&c) || is_discarded_via_trade_in(&game, c), "responder's card should land with active on reverse");
+    for c in other_pile {
+        assert!(game.player_collection(active).contains(&c) || is_discarded_via_trade_in(&game, c), "active's other-pile card should land with the active player on reverse");
     }
 }
 

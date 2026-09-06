@@ -168,8 +168,11 @@ Notes:
 
 ## Web app
 
-A very simple local Flask app with three modes, all built directly on the
-engine/env code above (no new Rust or binding changes needed):
+A very simple local Flask app with three modes, built directly on the
+engine/env code above. Every mode's setup form also lets you pick who goes
+first / buys first (or leave it random) via `Game`'s optional `first_player`
+constructor argument (`bindings/src/lib.rs`, wrapping
+`GameState::new_with_starting_leader`):
 
 - **Watch** — a game of AI models (or the random policy — pick per seat,
   independently, so you can e.g. pit an older snapshot against the latest
@@ -234,8 +237,8 @@ cd python && uv run pytest tests/ -q
 ## Rules assumptions to verify against the physical rulebook
 
 The spec explicitly flagged two rules interpretations as ambiguous in the
-absence of a physical rulebook; a third arose implementing §2.7. All three
-are implemented as small, isolated, easily-swappable pieces of logic:
+absence of a physical rulebook. Both are implemented as small, isolated,
+easily-swappable pieces of logic:
 
 1. **Buyer's extra peek — which hidden card flips (§2.3 step 3).** The
    rulebook doesn't say whether the Buyer picks *which* of a seller's two
@@ -255,16 +258,27 @@ are implemented as small, isolated, easily-swappable pieces of logic:
    runs. Covered explicitly by
    `buyer_mode_flow.rs::nasty_penalty_resolver_is_the_new_buyer_not_the_old_one`.
 
-3. **2-player mode's "two piles" (§2.7).** The rulebook text ("both players
-   take their own 3-card pile into their own Collection" under Accept)
-   implies two separate 3-card decks exist each turn, but only describes the
-   *active* player building one and revealing a card from it. Implemented
-   as: **both** players submit a 3-card deal from hand each turn; only the
-   active player's deal gets a face-up reveal (matching the literal "on your
-   turn" reveal step — the responder's deal stays fully hidden until
-   resolution); Accept keeps each pile with its own maker, Reverse swaps
-   them between players. See `DealOfferEntry::needs_reveal` and
-   `GameState::apply_respond_to_deal`.
+**2-player mode's split deal (§2.7) — confirmed, no longer an assumption.**
+On their turn, the active player splits exactly 3 cards from their *own*
+hand between "my pile" and "their pile" (any split summing to 3: 3/0, 2/1,
+1/2, 0/3 - which *specific* cards land on which side is itself part of the
+choice, not just the count), then reveals exactly one of those 3 cards
+face up themselves. The other player then Accepts (each pile goes where it
+was placed) or Reverses (the two piles swap owners). The opponent's hand is
+never touched and never needs to be known. See
+`Action::TwoPlayerSubmitDeal`, `GameState::apply_two_player_submit_deal`,
+and `Phase::TwoPlayerDealOffer` in `engine/src/game.rs`/`phase.rs`.
+
+**2-player Nasty trade-ins are always resolved by the *other* player.**
+Buyer mode's "new Buyer resolves it" shortcut (rules assumption 2 above)
+doesn't generalize to 2-player mode: an Accept can hand the responder their
+own pile back and complete a Nasty set in their *own* Collection the same
+instant they become the new turn leader, which would otherwise have them
+deciding what they themselves lose. `GameState::nasty_beneficiary` resolves
+this explicitly as "the other player relative to whoever's set completed",
+not "whoever currently holds `turn_leader`" - see
+`nasty_penalties.rs::two_player_nasty_trade_in_is_always_resolved_by_the_other_player`
+for the exact scenario this fixes.
 
 ## Performance
 

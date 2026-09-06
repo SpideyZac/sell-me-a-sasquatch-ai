@@ -40,6 +40,10 @@ def describe_action(game, action) -> str:
 
     if t == "submit_deal":
         return f"Offer deal: {', '.join(label(c) for c in d['cards'])}"
+    if t == "two_player_submit_deal":
+        own = ", ".join(label(c) for c in d["own_pile"]) or "nothing"
+        other = ", ".join(label(c) for c in d["other_pile"]) or "nothing"
+        return f"Split: keep [{own}], offer [{other}]"
     if t == "reveal_card":
         return f"Reveal {label(d['card'])}"
     if t == "buyer_peek":

@@ -18,8 +18,13 @@ pub enum ThingamabobParams {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Seller's (or, in 2-player mode, either player's) deal-offer micro-turn.
+    /// Buyer-mode only: a seller's deal-offer micro-turn.
     SubmitDeal { cards: [CardId; 3] },
+    /// 2-player mode only (§2.7): the active player's whole deal-offer
+    /// micro-turn - splits exactly 3 cards from their own hand between
+    /// `own_pile` (theirs again on Accept) and `other_pile` (the opponent's
+    /// on Accept); sizes can be any split summing to 3 (3/0, 2/1, 1/2, 0/3).
+    TwoPlayerSubmitDeal { own_pile: Vec<CardId>, other_pile: Vec<CardId> },
     /// Choosing which of the 3 just-submitted cards to flip face up.
     RevealCard { card: CardId },
     /// Buyer-mode only: the Buyer's extra peek target (§2.3 step 3). Which

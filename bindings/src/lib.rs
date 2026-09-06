@@ -51,6 +51,14 @@ impl PyAction {
         Self::wrap(Action::SubmitDeal { cards })
     }
 
+    /// 2-player mode only (§2.7): splits 3 of the active player's own hand
+    /// cards between `own_pile` (theirs again on Accept) and `other_pile`
+    /// (the opponent's on Accept); sizes can be any split summing to 3.
+    #[staticmethod]
+    fn two_player_submit_deal(own_pile: Vec<CardId>, other_pile: Vec<CardId>) -> Self {
+        Self::wrap(Action::TwoPlayerSubmitDeal { own_pile, other_pile })
+    }
+
     #[staticmethod]
     fn reveal_card(card: CardId) -> Self {
         Self::wrap(Action::RevealCard { card })
@@ -116,6 +124,11 @@ fn action_to_pydict<'py>(py: Python<'py>, action: &Action) -> PyResult<Bound<'py
         Action::SubmitDeal { cards } => {
             d.set_item("type", "submit_deal")?;
             d.set_item("cards", cards.to_vec())?;
+        }
+        Action::TwoPlayerSubmitDeal { own_pile, other_pile } => {
+            d.set_item("type", "two_player_submit_deal")?;
+            d.set_item("own_pile", own_pile.clone())?;
+            d.set_item("other_pile", other_pile.clone())?;
         }
         Action::RevealCard { card } => {
             d.set_item("type", "reveal_card")?;
@@ -352,10 +365,12 @@ pub struct PyGame {
 #[pymethods]
 impl PyGame {
     #[new]
-    fn new(num_players: usize, deck_config_path: &str, seed: u64) -> PyResult<Self> {
+    #[pyo3(signature = (num_players, deck_config_path, seed, first_player=None))]
+    fn new(num_players: usize, deck_config_path: &str, seed: u64, first_player: Option<PlayerId>) -> PyResult<Self> {
         let deck = DeckConfig::from_file(std::path::Path::new(deck_config_path))
             .map_err(|e| PyValueError::new_err(format!("failed to load deck config: {e}")))?;
-        let inner = GameState::new(num_players, deck, seed).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let inner = GameState::new_with_starting_leader(num_players, deck, seed, first_player)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyGame { inner })
     }
 

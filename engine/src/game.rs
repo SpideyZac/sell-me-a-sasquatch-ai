@@ -5,7 +5,10 @@ use crate::action::{Action, ThingamabobParams};
 use crate::card::{Card, CardId, CardKind, NastyKind, PlayerId, Tier, ThingamabobEffect, ThingamabobKind, NastyEffect};
 use crate::deal::Deal;
 use crate::deck::{Catalog, DeckConfig};
-use crate::phase::{DealOfferEntry, DealOfferState, DealOfferStep, NastyResolutionState, PendingNasty, Phase, ThingamabobWindowState};
+use crate::phase::{
+    DealOfferEntry, DealOfferState, DealOfferStep, NastyResolutionState, PendingNasty, Phase, ThingamabobWindowState, TwoPlayerDealState,
+    TwoPlayerDealStep,
+};
 use crate::player::{try_take_cards, try_take_point_tokens, Player};
 use crate::rng::GameRng;
 use std::collections::{HashMap, HashSet};
@@ -95,6 +98,8 @@ pub enum SetupError {
     InvalidPlayerCount(usize),
     #[error("deck has {have} cards, not enough to deal {need} initial hand cards")]
     NotEnoughCardsToDeal { have: usize, need: usize },
+    #[error("starting_leader {given} is out of range for {num_players} players")]
+    InvalidStartingLeader { given: PlayerId, num_players: usize },
 }
 
 /// A player's own hand card, with kind resolved for convenience (full
@@ -148,8 +153,26 @@ pub struct GameState {
 
 impl GameState {
     pub fn new(num_players: usize, deck: DeckConfig, seed: u64) -> Result<GameState, SetupError> {
+        Self::new_with_starting_leader(num_players, deck, seed, None)
+    }
+
+    /// Like `new`, but pins the first turn's leader/Buyer (§2.3 step 1;
+    /// §2.7 for 2-player mode) to `starting_leader` instead of picking one
+    /// uniformly at random - for a human-configured game where the players
+    /// have already agreed who goes first / who buys first.
+    pub fn new_with_starting_leader(
+        num_players: usize,
+        deck: DeckConfig,
+        seed: u64,
+        starting_leader: Option<PlayerId>,
+    ) -> Result<GameState, SetupError> {
         if !(2..=6).contains(&num_players) {
             return Err(SetupError::InvalidPlayerCount(num_players));
+        }
+        if let Some(given) = starting_leader {
+            if given >= num_players {
+                return Err(SetupError::InvalidStartingLeader { given, num_players });
+            }
         }
         let needed = num_players * HAND_SIZE;
         if deck.cards.len() < needed {
@@ -180,7 +203,7 @@ impl GameState {
             (GameMode::Buyer, 3 | 4) => 4,
             (GameMode::Buyer, _) => 5,
         };
-        let turn_leader = rng.gen_index(num_players);
+        let turn_leader = starting_leader.unwrap_or_else(|| rng.gen_index(num_players));
 
         let mut game = GameState {
             catalog: deck.catalog,
@@ -330,21 +353,17 @@ impl GameState {
 
     fn start_new_turn(&mut self) {
         self.deals.clear();
-        let entries = match self.mode {
-            GameMode::Buyer => self
-                .table_order_after(self.turn_leader)
-                .into_iter()
-                .map(|p| DealOfferEntry { player: p, needs_reveal: true })
-                .collect(),
-            GameMode::TwoPlayer => {
-                let other = 1 - self.turn_leader;
-                vec![
-                    DealOfferEntry { player: self.turn_leader, needs_reveal: true },
-                    DealOfferEntry { player: other, needs_reveal: false },
-                ]
+        self.phase = match self.mode {
+            GameMode::Buyer => {
+                let entries = self
+                    .table_order_after(self.turn_leader)
+                    .into_iter()
+                    .map(|p| DealOfferEntry { player: p, needs_reveal: true })
+                    .collect();
+                Phase::DealOffer(DealOfferState { entries, idx: 0, step: DealOfferStep::AwaitingSubmit })
             }
+            GameMode::TwoPlayer => Phase::TwoPlayerDealOffer(TwoPlayerDealState { step: TwoPlayerDealStep::AwaitingSplit }),
         };
-        self.phase = Phase::DealOffer(DealOfferState { entries, idx: 0, step: DealOfferStep::AwaitingSubmit });
     }
 
     fn start_thingamabob_window(&mut self) {
@@ -370,20 +389,31 @@ impl GameState {
                     vec![s.current().player]
                 }
             }
+            Phase::TwoPlayerDealOffer(_) => vec![self.turn_leader],
             Phase::BuyerPeek => vec![self.turn_leader],
             Phase::ThingamabobWindow(s) => vec![s.current_player()],
             Phase::BuyerChoosesDeal => vec![self.turn_leader],
             Phase::RespondToDeal => vec![1 - self.turn_leader],
-            Phase::NastyResolution(s) => vec![self.turn_leader_for_pending(s)],
+            Phase::NastyResolution(s) => vec![self.nasty_beneficiary(s.pending.player)],
             Phase::GameOver { .. } => vec![],
         }
     }
 
-    fn turn_leader_for_pending(&self, _s: &NastyResolutionState) -> PlayerId {
-        // The resolver is always the new turn leader - the Buyer marker
-        // (or, in 2-player mode, the responder) has already been assigned
-        // to `self.turn_leader` at deal-resolution time (§2.4 note).
-        self.turn_leader
+    /// Who resolves a completed Nasty set belonging to `loser` (§2.4): in
+    /// Buyer mode, the Buyer marker has already been reassigned to the new
+    /// Buyer/seller at deal-resolution time, so it's always `turn_leader`
+    /// (the newly-chosen seller never receives cards this same turn, so
+    /// `loser` is never that same player). In 2-player mode the same
+    /// "new turn leader" shortcut doesn't hold: an Accept can hand the
+    /// responder their own pile back and complete a set in their *own*
+    /// Collection, so the resolver there is always explicitly "the other
+    /// player" relative to `loser`, not whichever seat currently holds
+    /// `turn_leader`.
+    fn nasty_beneficiary(&self, loser: PlayerId) -> PlayerId {
+        match self.mode {
+            GameMode::TwoPlayer => 1 - loser,
+            GameMode::Buyer => self.turn_leader,
+        }
     }
 
     fn deal_for_seller(&self, seller: PlayerId) -> Option<&Deal> {
@@ -410,6 +440,12 @@ impl GameState {
                     deal.cards.iter().map(|c| Action::RevealCard { card: c.card }).collect()
                 }
             }
+            Phase::TwoPlayerDealOffer(s) => match s.step {
+                TwoPlayerDealStep::AwaitingSplit => self.legal_two_player_splits(player),
+                TwoPlayerDealStep::AwaitingReveal => {
+                    self.deals.iter().flat_map(|d| d.cards.iter().map(|c| Action::RevealCard { card: c.card })).collect()
+                }
+            },
             Phase::BuyerPeek => self.deals.iter().map(|d| Action::BuyerPeek { target_seller: d.seller }).collect(),
             Phase::ThingamabobWindow(_) => self.legal_thingamabob_actions(player),
             Phase::BuyerChoosesDeal => self.deals.iter().map(|d| Action::ChooseDeal { seller: d.seller }).collect(),
@@ -427,6 +463,31 @@ impl GameState {
             }
             Phase::GameOver { .. } => vec![],
         }
+    }
+
+    /// Every way the active player can split exactly 3 of their own hand
+    /// cards between "my pile" and "their pile" (§2.7): each 3-card subset
+    /// of the hand, crossed with every one of the 2^3 ways to assign each
+    /// of those 3 specific cards to a side (which naturally covers every
+    /// size split - 3/0, 2/1, 1/2, 0/3 - since which *specific* card ends up
+    /// on which side is itself a real, distinct choice).
+    fn legal_two_player_splits(&self, player: PlayerId) -> Vec<Action> {
+        let mut actions = Vec::new();
+        for combo in combinations(&self.players[player].hand, 3) {
+            for mask in 0u8..8 {
+                let mut own_pile = Vec::new();
+                let mut other_pile = Vec::new();
+                for (i, &card) in combo.iter().enumerate() {
+                    if mask & (1 << i) != 0 {
+                        own_pile.push(card);
+                    } else {
+                        other_pile.push(card);
+                    }
+                }
+                actions.push(Action::TwoPlayerSubmitDeal { own_pile, other_pile });
+            }
+        }
+        actions
     }
 
     fn legal_thingamabob_actions(&self, player: PlayerId) -> Vec<Action> {
@@ -513,6 +574,7 @@ impl GameState {
 
         match action {
             Action::SubmitDeal { cards } => self.apply_submit_deal(player, cards),
+            Action::TwoPlayerSubmitDeal { own_pile, other_pile } => self.apply_two_player_submit_deal(player, own_pile, other_pile),
             Action::RevealCard { card } => self.apply_reveal_card(player, card),
             Action::BuyerPeek { target_seller } => self.apply_buyer_peek(player, target_seller),
             Action::PlayThingamabob { card, params } => self.apply_play_thingamabob(player, card, params),
@@ -554,20 +616,67 @@ impl GameState {
         Ok(events)
     }
 
-    fn apply_reveal_card(&mut self, player: PlayerId, card: CardId) -> Result<Vec<Event>, RulesError> {
-        let Phase::DealOffer(s) = &self.phase else { return Err(RulesError::WrongPhaseAction(self.phase.name())) };
-        if s.step != DealOfferStep::AwaitingReveal {
+    /// 2-player mode only (§2.7): the active player's whole deal-offer
+    /// micro-turn, in one shot - splits exactly 3 of their own hand cards
+    /// between the two piles (any split summing to 3), removes all 3 from
+    /// hand, and creates a `Deal` per non-empty pile (none at all if a pile
+    /// is empty - nothing to award there either way).
+    fn apply_two_player_submit_deal(&mut self, player: PlayerId, own_pile: Vec<CardId>, other_pile: Vec<CardId>) -> Result<Vec<Event>, RulesError> {
+        let Phase::TwoPlayerDealOffer(s) = &self.phase else { return Err(RulesError::WrongPhaseAction(self.phase.name())) };
+        if s.step != TwoPlayerDealStep::AwaitingSplit {
             return Err(RulesError::WrongPhaseAction(self.phase.name()));
         }
-        let deal = self.deal_for_seller_mut(player).ok_or(RulesError::NoSuchDeal(player))?;
-        if !deal.cards.iter().any(|c| c.card == card) {
-            return Err(RulesError::RevealCardNotInDeal);
+        let all: Vec<CardId> = own_pile.iter().chain(other_pile.iter()).copied().collect();
+        if all.len() != 3 {
+            return Err(RulesError::DealMustBeThreeDistinctCards);
         }
-        deal.reveal(card);
-        self.advance_deal_offer();
-        let mut events = vec![Event::CardRevealed { seller: player, card }];
-        events.extend(self.maybe_finish_deal_offer());
-        Ok(events)
+        let unique: std::collections::HashSet<_> = all.iter().collect();
+        if unique.len() != 3 {
+            return Err(RulesError::DealMustBeThreeDistinctCards);
+        }
+        for &c in &all {
+            if !self.players[player].hand.contains(&c) {
+                return Err(RulesError::CardNotInHand(c));
+            }
+        }
+        for &c in &all {
+            self.players[player].remove_from_hand(c);
+        }
+
+        let other = 1 - player;
+        if !own_pile.is_empty() {
+            self.deals.push(Deal::from_pile(player, own_pile));
+        }
+        if !other_pile.is_empty() {
+            self.deals.push(Deal::from_pile(other, other_pile));
+        }
+
+        let Phase::TwoPlayerDealOffer(s) = &mut self.phase else { unreachable!() };
+        s.step = TwoPlayerDealStep::AwaitingReveal;
+        Ok(vec![Event::DealSubmitted { player }])
+    }
+
+    fn apply_reveal_card(&mut self, player: PlayerId, card: CardId) -> Result<Vec<Event>, RulesError> {
+        match &self.phase {
+            Phase::DealOffer(s) if s.step == DealOfferStep::AwaitingReveal => {
+                let deal = self.deal_for_seller_mut(player).ok_or(RulesError::NoSuchDeal(player))?;
+                if !deal.cards.iter().any(|c| c.card == card) {
+                    return Err(RulesError::RevealCardNotInDeal);
+                }
+                deal.reveal(card);
+                self.advance_deal_offer();
+                let mut events = vec![Event::CardRevealed { seller: player, card }];
+                events.extend(self.maybe_finish_deal_offer());
+                Ok(events)
+            }
+            Phase::TwoPlayerDealOffer(s) if s.step == TwoPlayerDealStep::AwaitingReveal => {
+                let deal = self.deals.iter_mut().find(|d| d.cards.iter().any(|c| c.card == card)).ok_or(RulesError::RevealCardNotInDeal)?;
+                deal.reveal(card);
+                self.start_thingamabob_window();
+                Ok(vec![Event::CardRevealed { seller: player, card }])
+            }
+            _ => Err(RulesError::WrongPhaseAction(self.phase.name())),
+        }
     }
 
     fn advance_deal_offer(&mut self) {
@@ -576,19 +685,15 @@ impl GameState {
         s.step = DealOfferStep::AwaitingSubmit;
     }
 
+    /// Buyer-mode only - 2-player mode's deal-offer never queues multiple
+    /// entries, so it moves straight to the Thingamabob window from
+    /// `apply_reveal_card` instead of going through this.
     fn maybe_finish_deal_offer(&mut self) -> Vec<Event> {
         let Phase::DealOffer(s) = &self.phase else { unreachable!() };
         if !s.is_done() {
             return vec![];
         }
-        match self.mode {
-            GameMode::Buyer => {
-                self.phase = Phase::BuyerPeek;
-            }
-            GameMode::TwoPlayer => {
-                self.start_thingamabob_window();
-            }
-        }
+        self.phase = Phase::BuyerPeek;
         vec![]
     }
 
@@ -807,10 +912,11 @@ impl GameState {
 
             match self.catalog.nasty_effect(kind) {
                 NastyEffect::BuyerStealsOnePointToken => {
+                    let beneficiary = self.nasty_beneficiary(player);
                     let taken = try_take_point_tokens(&mut self.players[player], 1);
-                    self.players[self.turn_leader].point_tokens += taken;
+                    self.players[beneficiary].point_tokens += taken;
                     if taken > 0 {
-                        events.push(Event::PointTokenStolen { from: player, to: self.turn_leader, amount: taken });
+                        events.push(Event::PointTokenStolen { from: player, to: beneficiary, amount: taken });
                     }
                 }
                 NastyEffect::BuyerMayStealUpToNCards(_) => {
@@ -825,8 +931,8 @@ impl GameState {
 
     fn apply_resolve_nasty_penalty(&mut self, player: PlayerId, taken_cards: Vec<CardId>) -> Result<Vec<Event>, RulesError> {
         let Phase::NastyResolution(s) = &self.phase else { return Err(RulesError::WrongPhaseAction(self.phase.name())) };
-        debug_assert_eq!(player, self.turn_leader);
         let pending = s.pending.clone();
+        debug_assert_eq!(player, self.nasty_beneficiary(pending.player));
         let max = match self.catalog.nasty_effect(pending.kind) {
             NastyEffect::BuyerMayStealUpToNCards(max) => max,
             NastyEffect::BuyerStealsOnePointToken => 0,

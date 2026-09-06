@@ -9,15 +9,14 @@ pub enum DealOfferStep {
     AwaitingReveal,
 }
 
-/// One seller's (or, in 2-player mode, one player's) slot in the deal-offer
-/// sequence. `needs_reveal` is false for the 2-player responder's deal -
-/// see README's flagged assumption for §2.7's two-piles interpretation.
+/// One seller's slot in the Buyer-mode deal-offer sequence (§2.3 steps 1-2).
 #[derive(Debug, Clone)]
 pub struct DealOfferEntry {
     pub player: PlayerId,
     pub needs_reveal: bool,
 }
 
+/// Buyer-mode only.
 #[derive(Debug, Clone)]
 pub struct DealOfferState {
     pub entries: Vec<DealOfferEntry>,
@@ -33,6 +32,21 @@ impl DealOfferState {
     pub fn is_done(&self) -> bool {
         self.idx >= self.entries.len()
     }
+}
+
+/// 2-player mode's deal-offer micro-turn (§2.7): the active player splits 3
+/// of their own hand cards between "my pile" and "their pile" in one shot
+/// (`AwaitingSplit`), then reveals exactly one of those 3 cards face up
+/// (`AwaitingReveal`) before the Thingamabob window opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwoPlayerDealStep {
+    AwaitingSplit,
+    AwaitingReveal,
+}
+
+#[derive(Debug, Clone)]
+pub struct TwoPlayerDealState {
+    pub step: TwoPlayerDealStep,
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +80,10 @@ pub struct NastyResolutionState {
 
 #[derive(Debug, Clone)]
 pub enum Phase {
+    /// Buyer-mode only.
     DealOffer(DealOfferState),
+    /// 2-player mode only.
+    TwoPlayerDealOffer(TwoPlayerDealState),
     /// Buyer-mode only.
     BuyerPeek,
     ThingamabobWindow(ThingamabobWindowState),
@@ -83,6 +100,13 @@ impl Phase {
         match self {
             Phase::DealOffer(s) => {
                 if s.step == DealOfferStep::AwaitingSubmit {
+                    "deal_offer_submit"
+                } else {
+                    "deal_offer_reveal"
+                }
+            }
+            Phase::TwoPlayerDealOffer(s) => {
+                if s.step == TwoPlayerDealStep::AwaitingSplit {
                     "deal_offer_submit"
                 } else {
                     "deal_offer_reveal"

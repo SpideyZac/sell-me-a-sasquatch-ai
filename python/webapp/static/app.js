@@ -45,6 +45,19 @@ function renderSeatModelSelects(container, numPlayers, excludeSeat) {
   }
 }
 
+// shared: "who goes first / buys first" select (blank = random)
+
+function renderFirstPlayerSelect(select, numPlayers) {
+  const previous = select.value;
+  select.innerHTML =
+    `<option value="">Random</option>` + Array.from({ length: numPlayers }, (_, i) => `<option value="${i}">player_${i}</option>`).join("");
+  if (previous && parseInt(previous, 10) < numPlayers) select.value = previous;
+}
+
+function readFirstPlayer(select) {
+  return select.value === "" ? null : parseInt(select.value, 10);
+}
+
 function collectSeatModels(container, numPlayers, humanSeat) {
   const seatModels = new Array(numPlayers).fill("random");
   container.querySelectorAll("select").forEach((sel) => {
@@ -62,7 +75,11 @@ let watchAutoplayTimer = null;
 function initWatch() {
   const numSel = document.getElementById("watch-num-players");
   const seatModelsDiv = document.getElementById("watch-seat-models");
-  const refreshSeats = () => renderSeatModelSelects(seatModelsDiv, parseInt(numSel.value, 10));
+  const firstPlayerSel = document.getElementById("watch-first-player");
+  const refreshSeats = () => {
+    renderSeatModelSelects(seatModelsDiv, parseInt(numSel.value, 10));
+    renderFirstPlayerSelect(firstPlayerSel, parseInt(numSel.value, 10));
+  };
   numSel.addEventListener("change", refreshSeats);
   refreshSeats();
 
@@ -73,7 +90,13 @@ function initWatch() {
     const res = await fetch("/api/games", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "watch", num_players: numPlayers, seat_models: seatModels, seed: seed || null }),
+      body: JSON.stringify({
+        mode: "watch",
+        num_players: numPlayers,
+        seat_models: seatModels,
+        first_player: readFirstPlayer(firstPlayerSel),
+        seed: seed || null,
+      }),
     });
     const data = await res.json();
     if (data.error) return alert(data.error);
@@ -159,11 +182,13 @@ function initPlay() {
   const numSel = document.getElementById("play-num-players");
   const seatSel = document.getElementById("play-human-seat");
   const seatModelsDiv = document.getElementById("play-seat-models");
+  const firstPlayerSel = document.getElementById("play-first-player");
 
   const refresh = () => {
     const n = parseInt(numSel.value, 10);
     seatSel.innerHTML = Array.from({ length: n }, (_, i) => `<option value="${i}">player_${i}</option>`).join("");
     renderSeatModelSelects(seatModelsDiv, n, parseInt(seatSel.value || "0", 10));
+    renderFirstPlayerSelect(firstPlayerSel, n);
   };
   numSel.addEventListener("change", refresh);
   seatSel.addEventListener("change", refresh);
@@ -177,7 +202,14 @@ function initPlay() {
     const res = await fetch("/api/games", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "play", num_players: numPlayers, human_seat: humanSeat, seat_models: seatModels, seed: seed || null }),
+      body: JSON.stringify({
+        mode: "play",
+        num_players: numPlayers,
+        human_seat: humanSeat,
+        seat_models: seatModels,
+        first_player: readFirstPlayer(firstPlayerSel),
+        seed: seed || null,
+      }),
     });
     const data = await res.json();
     if (data.error) return alert(data.error);
@@ -254,12 +286,14 @@ let liveGameId = null;
 function initAdvisor() {
   const numSel = document.getElementById("advisor-num-players");
   const seatSel = document.getElementById("advisor-human-seat");
+  const firstPlayerSel = document.getElementById("advisor-first-player");
   const modelSel = document.getElementById("advisor-model");
   modelSel.innerHTML = modelOptionsHtml();
 
   const refresh = () => {
     const n = parseInt(numSel.value, 10);
     seatSel.innerHTML = Array.from({ length: n }, (_, i) => `<option value="${i}">player_${i}</option>`).join("");
+    renderFirstPlayerSelect(firstPlayerSel, n);
   };
   numSel.addEventListener("change", refresh);
   refresh();
@@ -271,7 +305,13 @@ function initAdvisor() {
     const res = await fetch("/api/live", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ num_players: numPlayers, human_seat: humanSeat, seed: seed || null, advisor_model: modelSel.value }),
+      body: JSON.stringify({
+        num_players: numPlayers,
+        human_seat: humanSeat,
+        first_player: readFirstPlayer(firstPlayerSel),
+        seed: seed || null,
+        advisor_model: modelSel.value,
+      }),
     });
     const data = await res.json();
     if (data.error) return alert(data.error);

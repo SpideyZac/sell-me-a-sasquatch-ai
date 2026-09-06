@@ -21,6 +21,14 @@ impl Deal {
         Self { seller, cards: cards.into_iter().map(|card| DealCard { card, revealed: false }).collect() }
     }
 
+    /// 2-player mode's split piles (§2.7) aren't fixed at 3 cards each - the
+    /// active player can put anywhere from 0 to 3 of their offered cards on
+    /// a given side, as long as both piles sum to 3 - so this takes an
+    /// arbitrary-length pile rather than `new`'s fixed `[CardId; 3]`.
+    pub fn from_pile(seller: PlayerId, cards: Vec<CardId>) -> Self {
+        Self { seller, cards: cards.into_iter().map(|card| DealCard { card, revealed: false }).collect() }
+    }
+
     pub fn hidden_cards(&self) -> impl Iterator<Item = CardId> + '_ {
         self.cards.iter().filter(|c| !c.revealed).map(|c| c.card)
     }

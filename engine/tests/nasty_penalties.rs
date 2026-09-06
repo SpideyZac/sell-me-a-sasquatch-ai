@@ -139,3 +139,59 @@ fn trojan_horse_trade_in_auto_steals_one_point_token_no_action_needed() {
     }
     panic!("no seed in range produced a testable Trojan Horse completion");
 }
+
+/// §2.7's 2-player rule: whenever a Nasty set is traded in, the *other*
+/// player always decides what's taken - never the player who just completed
+/// the set, even when that player also happens to be the newly-assigned
+/// turn leader (§2.4 note's "new Buyer" shortcut only holds in Buyer mode -
+/// see `GameState::nasty_beneficiary`'s doc comment). This engineers exactly
+/// that collision: leader0 keeps 1 Poison Pill Bug from their own turn,
+/// then leader1 sends a 2nd one over on the very next turn, completing
+/// leader0's set right as leader0 (the responder) accepts it - so leader0
+/// becomes both "the loser" and the new turn leader in the same instant.
+#[test]
+fn two_player_nasty_trade_in_is_always_resolved_by_the_other_player() {
+    let is_ppb = |game: &sasquatch_engine::game::GameState, c: &sasquatch_engine::card::CardId| game.card_kind(*c) == Some(CardKind::Nasty(NastyKind::PoisonPillBug));
+    let is_not_nasty = |game: &sasquatch_engine::game::GameState, c: &sasquatch_engine::card::CardId| !matches!(game.card_kind(*c), Some(CardKind::Nasty(_)));
+
+    for seed in 0..60u64 {
+        let mut game = new_test_game(2, seed);
+        let leader0 = game.turn_leader();
+        let leader1 = 1 - leader0;
+
+        let Some(&leader0_ppb) = game.player_hand(leader0).iter().find(|c| is_ppb(&game, c)) else { continue };
+        let Some(&leader1_ppb) = game.player_hand(leader1).iter().find(|c| is_ppb(&game, c)) else { continue };
+        let leader0_fillers: Vec<_> = game.player_hand(leader0).iter().copied().filter(|c| is_not_nasty(&game, c)).take(2).collect();
+        let leader1_fillers: Vec<_> = game.player_hand(leader1).iter().copied().filter(|c| is_not_nasty(&game, c)).take(2).collect();
+        if leader0_fillers.len() < 2 || leader1_fillers.len() < 2 {
+            continue;
+        }
+
+        // Turn 1: leader0 keeps 1 Poison Pill Bug for themselves.
+        game.apply_action(leader0, Action::TwoPlayerSubmitDeal { own_pile: vec![leader0_ppb], other_pile: leader0_fillers }).unwrap();
+        let reveal = game.legal_actions(leader0).into_iter().next().unwrap();
+        game.apply_action(leader0, reveal).unwrap();
+        auto_pass_thingamabob_window(&mut game);
+        game.apply_action(leader1, Action::RespondToDeal { reverse: false }).unwrap();
+        assert_eq!(game.turn_leader(), leader1);
+        assert!(collection_cards_of_kind(&game, leader0, CardKind::Nasty(NastyKind::PoisonPillBug)).len() < 2, "shouldn't have completed a set yet");
+
+        // Turn 2: leader1 sends a 2nd Poison Pill Bug over to leader0,
+        // completing leader0's set the instant leader0 accepts it.
+        game.apply_action(leader1, Action::TwoPlayerSubmitDeal { own_pile: leader1_fillers, other_pile: vec![leader1_ppb] }).unwrap();
+        let reveal = game.legal_actions(leader1).into_iter().next().unwrap();
+        game.apply_action(leader1, reveal).unwrap();
+        auto_pass_thingamabob_window(&mut game);
+        let events = game.apply_action(leader0, Action::RespondToDeal { reverse: false }).unwrap();
+
+        assert!(events.iter().any(|e| matches!(e, Event::NastySetTradedIn { player, kind } if *player == leader0 && *kind == NastyKind::PoisonPillBug)));
+        assert_eq!(game.current_phase(), "nasty_resolution");
+        assert_eq!(game.turn_leader(), leader0, "leader0 (the loser) is also the newly-assigned turn leader in this scenario");
+        assert_eq!(game.active_players(), vec![leader1], "the OTHER player must decide what leader0 loses, never leader0 themselves");
+
+        let resolve = game.legal_actions(leader1).into_iter().next().unwrap();
+        game.apply_action(leader1, resolve).unwrap();
+        return;
+    }
+    panic!("no seed in range produced 2 players each starting with a Poison Pill Bug in hand");
+}
