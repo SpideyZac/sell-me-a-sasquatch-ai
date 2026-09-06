@@ -385,6 +385,23 @@ class LiveSession:
             pos = hidden.index(cid) + 1 if cid in hidden else 0
             return f"hidden card #{pos}"
 
+        def pile_label(cid: int) -> str:
+            """Like `label`, but for a still-hidden 2-player deal card, names
+            which *pile* it's in instead of a bare "???" - in 2-player mode
+            `reveal_card` can offer cards from either the active player's own
+            pile or the pile offered to the other player, and which pile a
+            flip came from is a real, physically-visible choice at the table
+            even before the card's kind is known (unlike Buyer mode's single-
+            seller reveal, where every candidate is genuinely interchangeable
+            and collapsing them to one option is correct)."""
+            if game.is_pinned(cid):
+                return display_name(game, cid)
+            for seller in self._all_active_deal_sellers():
+                if cid in game.hidden_cards_in_deal(seller):
+                    whose = "your" if seller == self.human_seat else f"player_{seller}'s"
+                    return f"a card from {whose} pile"
+            return "???"
+
         if t == "submit_deal":
             return f"Offer deal: {', '.join(label(c) for c in d['cards'])}"
         if t == "two_player_submit_deal":
@@ -392,7 +409,7 @@ class LiveSession:
             other = ", ".join(label(c) for c in d["other_pile"]) or "nothing"
             return f"Split: keep [{own}], offer [{other}]"
         if t == "reveal_card":
-            return f"Reveal {label(d['card'])}"
+            return f"Reveal {pile_label(d['card'])}"
         if t == "buyer_peek":
             return f"Peek into player_{d['target_seller']}'s deal"
         if t == "play_thingamabob":
