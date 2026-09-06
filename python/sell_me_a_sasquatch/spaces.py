@@ -1,51 +1,52 @@
 """Fixed-shape observation/action space definitions (§3.4).
 
-Hand sizes, deal contents, and the legal-action count all vary turn to turn,
-but Gymnasium/PettingZoo spaces must be fixed-shape. This module defines the
-padding/masking conventions used throughout:
+Every number here is *read from the Rust encoder* rather than declared
+again on this side. `engine/src/encode.rs` owns the observation layout, and
+`GameState::max_legal_actions` owns the action-space width, so the two can
+never silently drift apart.
 
-- Cards are never observed by raw `CardId` (an arbitrary, per-episode
-  integer with no meaning to a policy). They're bucketed into a small fixed
-  vocabulary of *card classes* (tier / Nasty kind / Thingamabob kind), with
-  class 0 reserved as the empty-slot sentinel.
-- The action space is `Discrete(MAX_ACTIONS)`: at any step, action index `i`
-  means "the i-th entry of `legal_actions()` right now" (an *ordinal*
-  encoding), not a fixed absolute action meaning. This sidesteps needing a
-  combinatorially complete fixed encoding of the full nested `Action` space
-  (SubmitDeal card triples, removal-target subsets, etc.) while still giving
-  a fixed-shape `Discrete` action space with an explicit `action_mask`, per
-  §3.4's requirement. The policy conditions on the observation (which fully
-  describes hands/collections/deals) to pick a meaningful ordinal index.
+Two conventions are worth knowing before reading anything else:
+
+- **The observation is one flat float32 vector plus one action-feature
+  matrix**, not a dict of per-card slots. Hands and Collections are
+  unordered sets, so they are encoded as per-class counts (permutation
+  invariant, and far smaller than a padded slot per card). Everything is
+  padded to `MAX_PLAYERS`/`MAX_DEALS` and expressed relative to the
+  observer's own seat, which is what lets a single policy play 2- through
+  6-player games.
+
+- **The action space is `Discrete(max_actions)` with an ordinal encoding**:
+  index `i` means "the i-th entry of `legal_actions()` right now", not a
+  fixed absolute action. That sidesteps a combinatorially complete encoding
+  of the nested `Action` type (deal triples, removal subsets, ...) while
+  keeping a fixed-shape space with an explicit mask, per §3.4. Because the
+  meaning of `i` changes state to state, the observation carries an
+  `actions` matrix describing what each candidate index actually does - see
+  `policy.py`, which scores candidates from those descriptions instead of
+  having to memorize the engine's enumeration order.
 """
 
 from __future__ import annotations
 
+from typing import Iterable, Sequence
+
 import numpy as np
 from gymnasium import spaces
 
-MAX_HAND = 8
-MAX_COLLECTION = 40
-MAX_DEALS = 6
-MAX_DEAL_CARDS = 4  # a deal starts at 3 but can grow via Cryptozooptic Expander
-MAX_ACTIONS = 256
+from . import _native as native
 
-CARD_CLASSES: list[str] = [
-    "Creature:Giant",
-    "Creature:Big",
-    "Creature:Medium",
-    "Creature:Tiny",
-    "Nasty:Poison Pill Bug",
-    "Nasty:Loan Shark",
-    "Nasty:Trojan Horse",
-    "Thingamabob:Platonic Isolator",
-    "Thingamabob:Detrital Repositioner",
-    "Thingamabob:Super Detrital Repositioner",
-    "Thingamabob:Cryptozooptic Expander",
-    "Thingamabob:Spectroelectric Optimeter",
-]
-EMPTY_CARD_CLASS = 0
-NUM_CARD_CLASSES = 1 + len(CARD_CLASSES)
-_CARD_CLASS_INDEX = {name: i + 1 for i, name in enumerate(CARD_CLASSES)}
+# Observation layout, straight from the Rust encoder.
+OBS_LEN: int = native.OBS_LEN
+ACTION_FEAT_LEN: int = native.ACTION_FEAT_LEN
+NOISE_OFFSET: int = native.NOISE_OFFSET
+NOISE_LEN: int = native.NOISE_LEN
+MAX_PLAYERS: int = native.MAX_PLAYERS
+MAX_DEALS: int = native.MAX_DEALS
+MIN_PLAYERS: int = 2
+
+ALL_PLAYER_COUNTS: tuple[int, ...] = tuple(range(MIN_PLAYERS, MAX_PLAYERS + 1))
+
+CARD_CLASSES: list[str] = list(native.CARD_CLASS_NAMES)
 
 # Must match `Phase::name()` in engine/src/phase.rs exactly.
 PHASES: list[str] = [
@@ -58,99 +59,100 @@ PHASES: list[str] = [
     "nasty_resolution",
     "game_over",
 ]
-_PHASE_INDEX = {name: i for i, name in enumerate(PHASES)}
+
+# Features are all ratios/one-hots/squashed counts, but a lead margin can go
+# mildly negative and a Collection can briefly overshoot its normalizer, so
+# the declared bounds leave room rather than clipping real values.
+_FEATURE_LIMIT = 4.0
 
 
-def card_class_id(kind_str: str | None) -> int:
-    """Maps a `Game.card_kind()` string (e.g. `"Creature:Giant"`) to its
-    fixed class id, or `EMPTY_CARD_CLASS` for `None` / an unknown string."""
-    if kind_str is None:
-        return EMPTY_CARD_CLASS
-    return _CARD_CLASS_INDEX.get(kind_str, EMPTY_CARD_CLASS)
+def max_legal_actions(deck: "native.Deck", player_counts: Iterable[int] = ALL_PLAYER_COUNTS) -> int:
+    """Widest action space any of `player_counts` needs with this deck.
+
+    Sizing the space from the deck (rather than a hand-audited constant)
+    means a custom `deck.toml` or a narrower table range resizes the policy
+    head automatically instead of silently truncating legal actions.
+    """
+    counts = tuple(player_counts)
+    if not counts:
+        raise ValueError("player_counts must not be empty")
+    return max(deck.max_legal_actions(n) for n in counts)
 
 
-def phase_id(phase: str) -> int:
-    return _PHASE_INDEX.get(phase, len(PHASES) - 1)
+def observation_space(max_actions: int, with_action_mask: bool = False) -> spaces.Dict:
+    """`state` is the tableau; `actions` describes each candidate action.
 
-
-def observation_space(num_players: int) -> spaces.Dict:
-    return spaces.Dict(
-        {
-            "own_hand": spaces.MultiDiscrete(np.full(MAX_HAND, NUM_CARD_CLASSES, dtype=np.int64)),
-            "own_hand_len": spaces.Discrete(MAX_HAND + 1),
-            # Flattened (not (num_players, MAX_COLLECTION)) - SB3's obs
-            # flattening/preprocessing only supports 1-D MultiDiscrete nvec.
-            "collections": spaces.MultiDiscrete(np.full(num_players * MAX_COLLECTION, NUM_CARD_CLASSES, dtype=np.int64)),
-            "collection_lens": spaces.Box(low=0, high=MAX_COLLECTION, shape=(num_players,), dtype=np.int32),
-            "point_tokens": spaces.Box(low=0, high=99, shape=(num_players,), dtype=np.int32),
-            "deal_present": spaces.MultiBinary(MAX_DEALS),
-            "deal_seller": spaces.MultiDiscrete(np.full(MAX_DEALS, num_players + 1, dtype=np.int64)),
-            "deal_revealed_cards": spaces.MultiDiscrete(np.full(MAX_DEALS * MAX_DEAL_CARDS, NUM_CARD_CLASSES, dtype=np.int64)),
-            "deal_num_hidden": spaces.Box(low=0, high=MAX_DEAL_CARDS, shape=(MAX_DEALS,), dtype=np.int32),
-            "phase": spaces.Discrete(len(PHASES)),
-            "turn_leader": spaces.Discrete(num_players),
-            "draw_pile_len": spaces.Box(low=0, high=200, shape=(1,), dtype=np.int32),
-            "discard_pile_len": spaces.Box(low=0, high=200, shape=(1,), dtype=np.int32),
-            "action_mask": spaces.MultiBinary(MAX_ACTIONS),
-        }
-    )
-
-
-def action_space() -> spaces.Discrete:
-    return spaces.Discrete(MAX_ACTIONS)
-
-
-def _pad_card_classes(card_kinds: list[str | None], width: int) -> np.ndarray:
-    arr = np.full(width, EMPTY_CARD_CLASS, dtype=np.int64)
-    for i, k in enumerate(card_kinds[:width]):
-        arr[i] = card_class_id(k)
-    return arr
-
-
-def vectorize_observation(game, observation, legal_action_count: int, num_players: int) -> dict:
-    """Builds the fixed-shape observation dict for one player from the
-    engine's `Observation` object (see `bindings/src/lib.rs::PyObservation`)
-    plus a `card_kind()` lookup on `game` for each raw `CardId`."""
-    own_hand_kinds = [game.card_kind(c) for c in observation.own_hand]
-    own_hand = _pad_card_classes(own_hand_kinds, MAX_HAND)
-
-    collections = np.full((num_players, MAX_COLLECTION), EMPTY_CARD_CLASS, dtype=np.int64)
-    collection_lens = np.zeros(num_players, dtype=np.int32)
-    for p, cards in enumerate(observation.collections):
-        kinds = [game.card_kind(c) for c in cards]
-        collections[p] = _pad_card_classes(kinds, MAX_COLLECTION)
-        collection_lens[p] = min(len(cards), MAX_COLLECTION)
-    collections = collections.reshape(-1)  # flattened to match the 1-D space
-
-    point_tokens = np.array(observation.point_tokens, dtype=np.int32)
-
-    deal_present = np.zeros(MAX_DEALS, dtype=np.int8)
-    deal_seller = np.full(MAX_DEALS, num_players, dtype=np.int64)  # sentinel = "no deal"
-    deal_revealed = np.full((MAX_DEALS, MAX_DEAL_CARDS), EMPTY_CARD_CLASS, dtype=np.int64)
-    deal_num_hidden = np.zeros(MAX_DEALS, dtype=np.int32)
-    for i, deal in enumerate(observation.deals[:MAX_DEALS]):
-        deal_present[i] = 1
-        deal_seller[i] = deal.seller
-        deal_revealed[i] = _pad_card_classes([game.card_kind(c) for c in deal.revealed_cards], MAX_DEAL_CARDS)
-        deal_num_hidden[i] = deal.num_hidden
-    deal_revealed = deal_revealed.reshape(-1)  # flattened to match the 1-D space
-
-    action_mask = np.zeros(MAX_ACTIONS, dtype=np.int8)
-    action_mask[: min(legal_action_count, MAX_ACTIONS)] = 1
-
-    return {
-        "own_hand": own_hand,
-        "own_hand_len": min(len(observation.own_hand), MAX_HAND),
-        "collections": collections,
-        "collection_lens": collection_lens,
-        "point_tokens": point_tokens,
-        "deal_present": deal_present,
-        "deal_seller": deal_seller,
-        "deal_revealed_cards": deal_revealed,
-        "deal_num_hidden": deal_num_hidden,
-        "phase": phase_id(observation.phase),
-        "turn_leader": observation.turn_leader,
-        "draw_pile_len": np.array([observation.draw_pile_len], dtype=np.int32),
-        "discard_pile_len": np.array([observation.discard_pile_len], dtype=np.int32),
-        "action_mask": action_mask,
+    `with_action_mask` adds the mask to the observation itself, which is the
+    PettingZoo convention for `AECEnv`. Single-agent training passes masks
+    out of band instead (sb3-contrib's `ActionMasker`), so the mask stays out
+    of the policy's input there.
+    """
+    fields = {
+        "state": spaces.Box(low=-_FEATURE_LIMIT, high=_FEATURE_LIMIT, shape=(OBS_LEN,), dtype=np.float32),
+        "actions": spaces.Box(low=-_FEATURE_LIMIT, high=_FEATURE_LIMIT, shape=(max_actions, ACTION_FEAT_LEN), dtype=np.float32),
     }
+    if with_action_mask:
+        fields["action_mask"] = spaces.MultiBinary(max_actions)
+    return spaces.Dict(fields)
+
+
+def action_space(max_actions: int) -> spaces.Discrete:
+    return spaces.Discrete(max_actions)
+
+
+def action_mask(legal_count: int, max_actions: int, out: np.ndarray | None = None) -> np.ndarray:
+    """The ordinal encoding makes every mask a prefix of ones, so this is a
+    fill rather than a per-action test."""
+    if out is None:
+        out = np.zeros(max_actions, dtype=np.int8)
+    else:
+        out.fill(0)
+    out[: min(legal_count, max_actions)] = 1
+    return out
+
+
+def sample_personas(rng: np.random.Generator, num_players: int) -> np.ndarray:
+    """One random "persona" vector per seat, resampled each episode.
+
+    The last `NOISE_LEN` slots of the state vector are left empty by the
+    engine for exactly this. A policy that is deterministic given the state
+    plays the same opening from the same deal every time - easy to read and
+    a poor explorer. Conditioning on a latent that is *constant within an
+    episode but resampled across episodes* lets one set of weights express a
+    family of coherent strategies and commit to one per game, instead of
+    re-rolling its personality on every micro-turn (which is all that
+    sampling from the action distribution gives you).
+    """
+    return rng.standard_normal((num_players, NOISE_LEN), dtype=np.float32)
+
+
+def empty_observation(max_actions: int) -> dict[str, np.ndarray]:
+    """Zeroed buffers of the right dtype/shape for `Game.encode` to fill."""
+    return {
+        "state": np.zeros(OBS_LEN, dtype=np.float32),
+        "actions": np.zeros((max_actions, ACTION_FEAT_LEN), dtype=np.float32),
+    }
+
+
+def encode_for_player(game, player: int, max_actions: int, persona: np.ndarray | None = None):
+    """One-call observation for `player`, for callers outside the training
+    loop (the web app, evaluation, ad-hoc analysis).
+
+    Returns `(observation, action_mask, legal_count)`. `persona` fills the
+    per-episode noise slots; left out, they stay zero, which is a
+    perfectly valid - just maximally bland - persona."""
+    obs = empty_observation(max_actions)
+    legal_count = game.encode(player, obs["state"], obs["actions"])
+    if persona is not None:
+        obs["state"][NOISE_OFFSET:] = persona
+    return obs, action_mask(legal_count, max_actions), legal_count
+
+
+def describe_layout() -> Sequence[str]:
+    """Human-readable summary, for `scripts/bench.py` and debugging."""
+    return (
+        f"state: {OBS_LEN} floats (last {NOISE_LEN} = per-episode persona, offset {NOISE_OFFSET})",
+        f"actions: (n, {ACTION_FEAT_LEN}) floats, one row per candidate action",
+        f"card classes: {len(CARD_CLASSES)}",
+        f"seats/deals padded to: {MAX_PLAYERS}/{MAX_DEALS}",
+    )

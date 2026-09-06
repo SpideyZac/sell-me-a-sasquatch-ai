@@ -69,11 +69,11 @@ fn choosing_a_deal_distributes_collections_and_passes_marker() {
     // already resolved by end of turn, so check right after distribution is
     // hard post-hoc; instead assert the *event* recorded exactly 3 cards).
     let awarded_to_old_buyer =
-        events.iter().find_map(|e| if let Event::CardsAwarded { player, cards } = e { (*player == old_buyer).then(|| cards.len()) } else { None });
+        events.iter().find_map(|e| if let Event::CardsAwarded { player, cards } = e { (*player == old_buyer).then_some(cards.len()) } else { None });
     assert_eq!(awarded_to_old_buyer, Some(3));
     let awarded_to_other = events
         .iter()
-        .find_map(|e| if let Event::CardsAwarded { player, cards } = e { (*player == other_seller).then(|| cards.len()) } else { None });
+        .find_map(|e| if let Event::CardsAwarded { player, cards } = e { (*player == other_seller).then_some(cards.len()) } else { None });
     assert_eq!(awarded_to_other, Some(3), "non-chosen seller keeps their own 3 cards");
 }
 

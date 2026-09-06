@@ -45,6 +45,9 @@ class GameSession:
     def __init__(self, game, num_players: int, mode: str, human_seat: "int | None", seat_specs: list[str], seat_policies: list):
         self.game = game
         self.num_players = num_players
+        # Width for random-policy seats; model seats use their own (see
+        # `models.observation_width`).
+        self.max_actions = game.max_legal_actions()
         self.mode = mode  # "watch" | "play"
         self.human_seat = human_seat
         self.seat_specs = seat_specs
@@ -57,9 +60,10 @@ def _step_seat(session: GameSession, player: int) -> None:
     legal = game.legal_actions(player)
     if not legal:
         return
-    obs_native = game.observation(player)
-    obs_vec = sasquatch_spaces.vectorize_observation(game, obs_native, len(legal), session.num_players)
-    idx = session.seat_policies[player](obs_vec, obs_vec["action_mask"])
+    policy = session.seat_policies[player]
+    width = getattr(policy, "max_actions", None) or session.max_actions
+    obs, mask, legal_count = sasquatch_spaces.encode_for_player(game, player, width)
+    idx = policy(obs, mask, legal_count)
     idx = idx if isinstance(idx, int) and 0 <= idx < len(legal) else 0
     action = legal[idx]
     who = "You" if player == session.human_seat else f"player_{player}"
@@ -74,7 +78,7 @@ def _auto_resolve_ai_turns(session: GameSession, max_steps: int = 1000) -> None:
     for _ in range(max_steps):
         if game.is_game_over():
             return
-        active = game.active_players()[0]
+        active = game.active_player()
         if session.mode == "play" and active == session.human_seat:
             return
         _step_seat(session, active)
@@ -223,7 +227,7 @@ def api_advance(game_id):
     if session.mode != "watch":
         return jsonify({"error": "advance is only for watch-mode games"}), 400
     if not session.game.is_game_over():
-        _step_seat(session, session.game.active_players()[0])
+        _step_seat(session, session.game.active_player())
     return jsonify({"state": _view_for(session)})
 
 

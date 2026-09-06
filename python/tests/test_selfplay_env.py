@@ -10,57 +10,76 @@ from sell_me_a_sasquatch.selfplay_env import OpponentPool, SasquatchSelfPlayEnv,
 DECK_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "configs", "deck.toml"))
 
 
-@pytest.mark.parametrize("num_players", [2, 3, 4, 5, 6])
-def test_random_vs_random_episode_runs_to_completion(num_players):
-    env = SasquatchSelfPlayEnv(num_players=num_players, deck_config_path=DECK_PATH, opponent_policy=random_masked_policy)
+def make_env(**kwargs):
+    kwargs.setdefault("deck_config_path", DECK_PATH)
+    kwargs.setdefault("opponent_policy", random_masked_policy)
+    return SasquatchSelfPlayEnv(**kwargs)
+
+
+@pytest.mark.parametrize("players", [2, 3, 4, 5, 6])
+def test_random_vs_random_episode_runs_to_completion(players):
+    env = make_env(players=players)
     obs, info = env.reset(seed=1)
     assert env.observation_space.contains(obs)
 
-    rng = np.random.default_rng(1)  # seeded, not global np.random - keeps this test reproducible
+    rng = np.random.default_rng(1)  # seeded, not global - keeps this test reproducible
     terminated = False
     reward = 0.0
     steps = 0
     while not terminated and steps < 5000:
-        mask = env.action_masks()
-        legal = np.flatnonzero(mask)
-        assert legal.size > 0, "action mask must never be empty for the learner's own turn"
-        action = int(rng.choice(legal))
-        obs, reward, terminated, truncated, info = env.step(action)
+        legal = np.flatnonzero(env.action_masks())
+        assert legal.size > 0, "the learner's own turn must always have a legal action"
+        obs, reward, terminated, truncated, info = env.step(int(rng.choice(legal)))
         assert env.observation_space.contains(obs)
         assert not truncated
         steps += 1
 
     assert terminated
-    assert "winner" in info
-    assert 0 <= info["winner"] < num_players
-    # Total reward carries the terminal +-1 (§3.4) plus an accumulated
-    # potential-based shaping term (see `default_reward_fn` in env.py), so
-    # it won't be exactly +-1 - just check it's a sane finite number.
+    assert 0 <= info["winner"] < players
+    assert info["num_players"] == players
+    # The total carries the terminal +-1 (§3.4) plus accumulated
+    # potential-based shaping, so it will not be exactly +-1 - just finite.
     assert np.isfinite(reward)
 
 
+def test_one_env_plays_every_table_size():
+    """The single general model's premise: 2- through 6-player games share
+    one observation and action space, so one env can serve all of them."""
+    env = make_env(players=(2, 3, 4, 5, 6))
+    seen = set()
+    for seed in range(40):
+        obs, _ = env.reset(seed=seed)
+        assert env.observation_space.contains(obs)
+        seen.add(env.num_players)
+    assert len(seen) >= 4, f"expected a spread of table sizes, saw {sorted(seen)}"
+
+
+def test_action_space_width_covers_every_table_size():
+    env = make_env(players=(2, 3, 4, 5, 6))
+    for n in (2, 3, 4, 5, 6):
+        assert env.action_space.n >= env.deck.max_legal_actions(n)
+
+
 def test_learner_seat_can_be_fixed():
-    env = SasquatchSelfPlayEnv(num_players=4, deck_config_path=DECK_PATH, opponent_policy=random_masked_policy, learner_seat=2)
+    env = make_env(players=4, learner_seat=2)
     env.reset(seed=5)
-    assert env._learner_agent == "player_2"
-
-
-def test_action_mask_matches_observation_action_mask():
-    env = SasquatchSelfPlayEnv(num_players=4, deck_config_path=DECK_PATH, opponent_policy=random_masked_policy)
-    obs, _ = env.reset(seed=2)
-    assert np.array_equal(env.action_masks(), obs["action_mask"])
+    assert env.learner_seat == 2
 
 
 def test_masked_out_action_index_is_handled_defensively():
-    env = SasquatchSelfPlayEnv(num_players=4, deck_config_path=DECK_PATH, opponent_policy=random_masked_policy)
-    obs, _ = env.reset(seed=3)
-    # Deliberately pass an action index guaranteed to be illegal.
-    from sell_me_a_sasquatch import spaces as sasquatch_spaces
+    env = make_env(players=4)
+    env.reset(seed=3)
+    illegal_action = env.action_space.n - 1
+    assert env.action_masks()[illegal_action] == 0
+    obs, reward, terminated, truncated, info = env.step(illegal_action)
+    assert env.observation_space.contains(obs)
 
-    illegal_action = sasquatch_spaces.MAX_ACTIONS - 1
-    assert obs["action_mask"][illegal_action] == 0
-    obs2, reward, terminated, truncated, info = env.step(illegal_action)
-    assert env.observation_space.contains(obs2)
+
+def test_personas_differ_between_seats_within_an_episode():
+    env = make_env(players=5)
+    env.reset(seed=11)
+    personas = env._personas[: env.num_players]
+    assert len({tuple(p) for p in personas}) == env.num_players
 
 
 class _StubModel:
@@ -80,16 +99,14 @@ def test_opponent_pool_falls_back_to_random_with_no_model_or_snapshots():
     pool = OpponentPool()
     pool.new_episode()
     mask = np.zeros(8, dtype=np.int8)
-    mask[3] = 1
-    action = pool(obs={}, mask=mask)
-    assert action == 3  # random_masked_policy over a single legal action is deterministic
+    mask[0] = 1
+    assert pool(obs={}, mask=mask, legal_count=1) == 0  # one legal action -> deterministic
 
 
 def test_opponent_pool_add_snapshot_caps_at_max_snapshots():
     pool = OpponentPool(max_snapshots=3)
     for i in range(5):
         pool.add_snapshot(_StubModel(i))
-    assert len(pool.snapshots) == 3
     assert [m.tag for m in pool.snapshots] == [2, 3, 4]  # oldest evicted first
 
 
@@ -106,3 +123,10 @@ def test_opponent_pool_can_select_an_older_snapshot():
     pool.add_snapshot(_StubModel("old"))
     pool.new_episode()
     assert pool._active is pool.snapshots[0]
+
+
+def test_add_opponent_snapshot_is_a_no_op_without_a_pool():
+    """`VecEnv.env_method` fans the call out to every worker, including ones
+    training against the random baseline - it must not blow up there."""
+    env = make_env(players=4)
+    env.add_opponent_snapshot("does/not/exist.zip")

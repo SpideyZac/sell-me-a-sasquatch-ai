@@ -10,3 +10,4 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 sasquatch-engine = { path = "../engine" }
 pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"

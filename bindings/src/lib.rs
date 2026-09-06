@@ -1,33 +1,26 @@
 //! PyO3 bindings (§3.3) exposing `sasquatch_engine::game::GameState` as
-//! `PyGame`. Kept to the FFI boundary crossed once per micro-step (§3.5) -
-//! no per-card calls back into Rust.
+//! `PyGame`.
+//!
+//! The boundary is crossed exactly once per micro-step on the training path
+//! (§3.5): `encode_observation` writes the whole fixed-shape observation
+//! straight into a caller-owned numpy buffer, and `step_index` applies the
+//! i-th legal action without ever materializing a Python object per action.
+//! The richer object API (`observation`, `legal_actions`, `step`) is still
+//! here for the web app and for live-tracking a physical game, where one
+//! call per human decision costs nothing.
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use numpy::{PyReadwriteArray1, PyReadwriteArray2};
+use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use sasquatch_engine::action::{Action, ThingamabobParams};
-use sasquatch_engine::card::{CardId, CardKind, NastyKind, PlayerId, Tier, ThingamabobKind};
+use sasquatch_engine::card::{CardId, CardKind, PlayerId, CARD_CLASS_NAMES};
 use sasquatch_engine::deck::DeckConfig;
+use sasquatch_engine::encode::{ACTION_FEAT_LEN, MAX_DEALS, MAX_PLAYERS, NOISE_LEN, NOISE_OFFSET, OBS_LEN};
 use sasquatch_engine::game::{Event, GameState, Observation, ObservedDeal};
 
 fn card_kind_to_string(kind: CardKind) -> String {
-    match kind {
-        CardKind::Creature(tier) => format!("Creature:{tier}"),
-        CardKind::Nasty(kind) => format!("Nasty:{}", kind.name()),
-        CardKind::Thingamabob(kind) => format!("Thingamabob:{}", kind.name()),
-    }
-}
-
-/// Inverse of `card_kind_to_string` - parses e.g. `"Creature:Tiny"` back into
-/// a `CardKind`, for `PyGame::pin_kind` (live-tracking a physical game).
-fn parse_card_kind(s: &str) -> Option<CardKind> {
-    let (prefix, rest) = s.split_once(':')?;
-    match prefix {
-        "Creature" => Tier::parse(rest).map(CardKind::Creature),
-        "Nasty" => NastyKind::parse(rest).map(CardKind::Nasty),
-        "Thingamabob" => ThingamabobKind::parse(rest).map(CardKind::Thingamabob),
-        _ => None,
-    }
+    kind.name()
 }
 
 // PyAction
@@ -355,27 +348,101 @@ impl PyStepResult {
     }
 }
 
+// PyDeck
+
+/// A parsed `deck.toml`, kept alive across episodes.
+///
+/// Re-reading and re-parsing the deck config on every `reset()` used to cost
+/// a file read plus a full TOML parse per episode - easily more than the
+/// episode itself once the engine got fast. Parse once, clone the in-memory
+/// config per game.
+#[pyclass(name = "Deck")]
+#[derive(Clone)]
+pub struct PyDeck {
+    inner: DeckConfig,
+    #[pyo3(get)]
+    path: Option<String>,
+}
+
+#[pymethods]
+impl PyDeck {
+    #[new]
+    fn new(path: &str) -> PyResult<Self> {
+        let inner = DeckConfig::from_file(std::path::Path::new(path))
+            .map_err(|e| PyValueError::new_err(format!("failed to load deck config: {e}")))?;
+        Ok(PyDeck { inner, path: Some(path.to_string()) })
+    }
+
+    #[staticmethod]
+    fn from_toml(text: &str) -> PyResult<Self> {
+        let inner = DeckConfig::from_toml_str(text).map_err(|e| PyValueError::new_err(format!("failed to parse deck config: {e}")))?;
+        Ok(PyDeck { inner, path: None })
+    }
+
+    fn total_cards(&self) -> usize {
+        self.inner.total_cards()
+    }
+
+    /// Exact width the ordinal action space needs for a table of
+    /// `num_players` playing this deck (see `GameState::max_legal_actions`).
+    fn max_legal_actions(&self, num_players: usize) -> PyResult<usize> {
+        let game = GameState::new(num_players, self.inner.clone(), 0).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(game.max_legal_actions())
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Deck(cards={}, path={:?})", self.inner.total_cards(), self.path)
+    }
+}
+
 // PyGame
 
 #[pyclass(name = "Game")]
 pub struct PyGame {
     inner: GameState,
+    /// Memoized `legal_actions` for the current state. A step needs the
+    /// action list twice - once to size the mask, once to resolve the chosen
+    /// index - and enumerating it is the engine's most expensive operation.
+    legal_cache: Option<(PlayerId, Vec<Action>)>,
+}
+
+impl PyGame {
+    fn legal_for(&mut self, player: PlayerId) -> &[Action] {
+        if !matches!(&self.legal_cache, Some((p, _)) if *p == player) {
+            self.legal_cache = Some((player, self.inner.legal_actions(player)));
+        }
+        &self.legal_cache.as_ref().expect("just populated").1
+    }
 }
 
 #[pymethods]
 impl PyGame {
+    /// `deck` is either a `Deck` (preferred - parsed once, reused for every
+    /// episode) or a path to a `deck.toml`, which parses it afresh.
     #[new]
-    #[pyo3(signature = (num_players, deck_config_path, seed, first_player=None))]
-    fn new(num_players: usize, deck_config_path: &str, seed: u64, first_player: Option<PlayerId>) -> PyResult<Self> {
-        let deck = DeckConfig::from_file(std::path::Path::new(deck_config_path))
-            .map_err(|e| PyValueError::new_err(format!("failed to load deck config: {e}")))?;
-        let inner = GameState::new_with_starting_leader(num_players, deck, seed, first_player)
+    #[pyo3(signature = (num_players, deck, seed, first_player=None))]
+    fn new(num_players: usize, deck: &Bound<'_, PyAny>, seed: u64, first_player: Option<PlayerId>) -> PyResult<Self> {
+        let config = if let Ok(d) = deck.extract::<PyDeck>() {
+            d.inner
+        } else {
+            let path: String = deck.extract().map_err(|_| PyValueError::new_err("deck must be a Deck or a path to a deck.toml"))?;
+            DeckConfig::from_file(std::path::Path::new(&path))
+                .map_err(|e| PyValueError::new_err(format!("failed to load deck config: {e}")))?
+        };
+        let inner = GameState::new_with_starting_leader(num_players, config, seed, first_player)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(PyGame { inner })
+        Ok(PyGame { inner, legal_cache: None })
     }
 
-    fn legal_actions(&self, player: PlayerId) -> Vec<PyAction> {
-        self.inner.legal_actions(player).into_iter().map(PyAction::wrap).collect()
+    fn legal_actions(&mut self, player: PlayerId) -> Vec<PyAction> {
+        self.legal_for(player).iter().cloned().map(PyAction::wrap).collect()
+    }
+
+    /// How many actions are legal for `player` right now. The ordinal action
+    /// space's mask is exactly `[1] * this + [0] * (width - this)`, so the
+    /// training loop never needs the actions themselves.
+    fn legal_action_count(&mut self, player: PlayerId) -> usize {
+        self.legal_for(player).len()
     }
 
     fn step(&mut self, player: PlayerId, action: &PyAction) -> PyResult<PyStepResult> {
@@ -383,7 +450,65 @@ impl PyGame {
             .inner
             .apply_action(player, action.inner.clone())
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        self.legal_cache = None;
         Ok(PyStepResult { events, done: self.inner.is_game_over(), winner: self.inner.winner() })
+    }
+
+    /// Applies the `index`-th currently-legal action - the ordinal action
+    /// space's step, with no Python `Action` object built along the way.
+    /// Returns `(done, winner)`; use `step` when the events matter.
+    fn step_index(&mut self, player: PlayerId, index: usize) -> PyResult<(bool, Option<PlayerId>)> {
+        let action = self
+            .legal_for(player)
+            .get(index)
+            .ok_or_else(|| PyIndexError::new_err(format!("action index {index} out of range for player {player}")))?
+            .clone();
+        self.inner.apply_action(player, action).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        self.legal_cache = None;
+        Ok((self.inner.is_game_over(), self.inner.winner()))
+    }
+
+    /// Writes `player`'s fixed-shape observation into `out` (a contiguous
+    /// float32 array of length `OBS_LEN`), in place. Returns the number of
+    /// currently-legal actions, since the caller needs it for the action mask
+    /// on the very same step.
+    fn encode_observation(&mut self, player: PlayerId, mut out: PyReadwriteArray1<f32>) -> PyResult<usize> {
+        let slice = out.as_slice_mut().map_err(|_| PyValueError::new_err("observation buffer must be contiguous float32"))?;
+        if slice.len() != OBS_LEN {
+            return Err(PyValueError::new_err(format!("observation buffer must have length {OBS_LEN}, got {}", slice.len())));
+        }
+        self.inner.encode_observation(player, slice);
+        Ok(self.legal_for(player).len())
+    }
+
+    /// The training loop's single boundary crossing: fills `obs` with
+    /// `player`'s state vector and `actions` with one feature row per
+    /// currently-legal action, and returns how many rows are live (the rest
+    /// are zeroed, and masked out by the caller). See
+    /// `GameState::encode_observation` / `encode_actions`.
+    fn encode(&mut self, player: PlayerId, mut obs: PyReadwriteArray1<f32>, mut actions: PyReadwriteArray2<f32>) -> PyResult<usize> {
+        let obs_slice = obs.as_slice_mut().map_err(|_| PyValueError::new_err("observation buffer must be contiguous float32"))?;
+        if obs_slice.len() != OBS_LEN {
+            return Err(PyValueError::new_err(format!("observation buffer must have length {OBS_LEN}, got {}", obs_slice.len())));
+        }
+        let act_slice = actions
+            .as_slice_mut()
+            .map_err(|_| PyValueError::new_err("action-feature buffer must be C-contiguous float32"))?;
+        if act_slice.len() % ACTION_FEAT_LEN != 0 {
+            return Err(PyValueError::new_err(format!("action-feature buffer must be (n, {ACTION_FEAT_LEN})")));
+        }
+        self.inner.encode_observation(player, obs_slice);
+        // Move the cache out so the action list and `self.inner` are
+        // provably disjoint borrows - no per-step clone of the action list.
+        let mut cache = self.legal_cache.take();
+        if !matches!(&cache, Some((p, _)) if *p == player) {
+            cache = Some((player, self.inner.legal_actions(player)));
+        }
+        let legal = &cache.as_ref().expect("just populated").1;
+        let count = legal.len();
+        self.inner.encode_actions(player, legal, act_slice);
+        self.legal_cache = cache;
+        Ok(count)
     }
 
     fn observation(&self, player: PlayerId) -> PyObservation {
@@ -392,6 +517,11 @@ impl PyGame {
 
     fn current_phase(&self) -> String {
         self.inner.current_phase().to_string()
+    }
+
+    /// The one seat to act right now, or `None` if the game is over.
+    fn active_player(&self) -> Option<PlayerId> {
+        self.inner.active_player()
     }
 
     fn active_players(&self) -> Vec<PlayerId> {
@@ -406,6 +536,14 @@ impl PyGame {
         self.inner.win_threshold()
     }
 
+    fn max_legal_actions(&self) -> usize {
+        self.inner.max_legal_actions()
+    }
+
+    fn turn_index(&self) -> u32 {
+        self.inner.turn_index()
+    }
+
     fn turn_leader(&self) -> PlayerId {
         self.inner.turn_leader()
     }
@@ -416,6 +554,13 @@ impl PyGame {
 
     fn winner(&self) -> Option<PlayerId> {
         self.inner.winner()
+    }
+
+    /// Every seat's Point Tokens. Public information (§2.2), and cheap -
+    /// reward shaping reads it on every single step, so it must not go
+    /// through the full `observation()` (which clones every Collection).
+    fn point_tokens(&self) -> Vec<u32> {
+        (0..self.inner.num_players()).map(|p| self.inner.player_point_tokens(p)).collect()
     }
 
     fn card_kind(&self, card: CardId) -> Option<String> {
@@ -453,14 +598,15 @@ impl PyGame {
     /// Remaining not-yet-pinned supply per card class (e.g. `"Creature:Tiny"`
     /// -> how many more could still be truthfully `pin_kind`-ed).
     fn kind_supply(&self) -> std::collections::HashMap<String, u32> {
-        self.inner.kind_supply().iter().map(|(k, v)| (card_kind_to_string(*k), *v)).collect()
+        self.inner.kind_supply().into_iter().map(|(k, v)| (card_kind_to_string(k), v)).collect()
     }
 
     /// For live-tracking a physical game: overwrites `card`'s kind to match
     /// what was actually revealed at the table (see `GameState::pin_kind`).
     fn pin_kind(&mut self, card: CardId, kind: &str) -> PyResult<()> {
-        let kind = parse_card_kind(kind).ok_or_else(|| PyValueError::new_err(format!("unknown card kind: {kind}")))?;
-        self.inner.pin_kind(card, kind).map_err(|e| PyValueError::new_err(e.to_string()))
+        let parsed = CardKind::parse(kind).ok_or_else(|| PyValueError::new_err(format!("unknown card kind: {kind}")))?;
+        self.legal_cache = None;
+        self.inner.pin_kind(card, parsed).map_err(|e| PyValueError::new_err(e.to_string()))
     }
 }
 
@@ -469,9 +615,19 @@ impl PyGame {
 #[pymodule(name = "_native")]
 fn sasquatch_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGame>()?;
+    m.add_class::<PyDeck>()?;
     m.add_class::<PyAction>()?;
     m.add_class::<PyObservation>()?;
     m.add_class::<PyObservedDeal>()?;
     m.add_class::<PyStepResult>()?;
+    // Observation layout, so the Python spaces are derived from the encoder
+    // rather than re-declared alongside it and left to drift.
+    m.add("OBS_LEN", OBS_LEN)?;
+    m.add("NOISE_OFFSET", NOISE_OFFSET)?;
+    m.add("NOISE_LEN", NOISE_LEN)?;
+    m.add("MAX_PLAYERS", MAX_PLAYERS)?;
+    m.add("MAX_DEALS", MAX_DEALS)?;
+    m.add("ACTION_FEAT_LEN", ACTION_FEAT_LEN)?;
+    m.add("CARD_CLASS_NAMES", CARD_CLASS_NAMES.to_vec())?;
     Ok(())
 }

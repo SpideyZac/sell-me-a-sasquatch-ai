@@ -33,7 +33,7 @@ from sell_me_a_sasquatch import _native as native
 from sell_me_a_sasquatch import spaces as sasquatch_spaces
 
 from card_display import card_dict, display_name, human_card_class_label
-from models import get_model
+from models import get_model, observation_width
 from scoring import rank_actions
 
 MAX_SETTLE_STEPS = 2000
@@ -141,7 +141,7 @@ class LiveSession:
         if self.game.is_game_over():
             return {"type": "game_over", "winner": self.game.winner()}
 
-        seat = self.game.active_players()[0]
+        seat = self.game.active_player()
         legal = self.game.legal_actions(seat)
         groups = self._group_actions(seat, legal)
         if seat == self.human_seat:
@@ -178,7 +178,7 @@ class LiveSession:
             if self.game.is_game_over():
                 return
 
-            seat = self.game.active_players()[0]
+            seat = self.game.active_player()
             legal = self.game.legal_actions(seat)
             if not legal:
                 return
@@ -318,7 +318,7 @@ class LiveSession:
     def _choose(self, index: int) -> None:
         if self.game.is_game_over():
             raise LiveGameError("the game is already over")
-        seat = self.game.active_players()[0]
+        seat = self.game.active_player()
         legal = self.game.legal_actions(seat)
         groups = self._group_actions(seat, legal)
         if not (0 <= index < len(groups)):
@@ -357,10 +357,10 @@ class LiveSession:
         return groups
 
     def _score_groups(self, legal: list, groups: list[dict]) -> None:
-        obs_native = self.game.observation(self.human_seat)
-        obs_vec = sasquatch_spaces.vectorize_observation(self.game, obs_native, len(legal), self.num_players)
         model = get_model(self.advisor_model_spec)
-        ranked = dict(rank_actions(model, obs_vec, obs_vec["action_mask"]))
+        width = observation_width(model) or self.game.max_legal_actions()
+        obs, mask, _ = sasquatch_spaces.encode_for_player(self.game, self.human_seat, width)
+        ranked = dict(rank_actions(model, obs, mask))
         for g in groups:
             g["score"] = round(sum(ranked.get(i, 0.0) for i in g["indices"]), 3)
         if groups:

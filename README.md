@@ -9,8 +9,12 @@ for the full game-rules spec this was built against.
 
 ```
 engine/       Rust crate: pure game logic (GameState, Action, Event, rules)
+  src/encode.rs   fixed-shape observation + action-feature encoding
+  src/stats.rs    per-episode memory folded out of the rules' own Events
 bindings/     PyO3 crate exposing GameState to Python as `_native`
-python/       `sell_me_a_sasquatch` package: PettingZoo AECEnv + spaces + renderer
+python/       `sell_me_a_sasquatch` package: PettingZoo AECEnv, self-play env,
+              spaces, pointer policy, renderer
+  scripts/        train.py, play.py (evaluate), bench.py (throughput)
 configs/      deck.toml — the confirmed 120-card deck (§2.5), authoritative game data
 ```
 
@@ -45,12 +49,17 @@ Requires a Python interpreter; this project uses `uv`.
 cd python
 uv venv --python 3.12
 uv pip install maturin pytest
-uv run maturin develop     # builds bindings/ and installs it as sell_me_a_sasquatch._native
+uv run maturin develop --release   # builds bindings/ as sell_me_a_sasquatch._native
 uv run pytest tests/ -q
 ```
 
 `maturin develop` needs to be re-run after any change under `engine/` or
 `bindings/` to rebuild the native extension.
+
+**Use `--release`.** `maturin develop` defaults to a debug build, which is
+roughly an order of magnitude slower here - and since the engine runs every
+micro-step of every self-play episode, that is the difference between a
+usable training loop and an unusable one.
 
 ## Running a random-policy sanity episode
 
@@ -88,83 +97,154 @@ from sell_me_a_sasquatch.render import render_state
 print(render_state(e.unwrapped._game))
 ```
 
+## Observation and action encoding
+
+Worth reading before the training section — everything else follows from it.
+Both halves are produced by Rust (`engine/src/encode.rs`) and written
+straight into caller-owned numpy buffers, so a micro-step crosses the FFI
+boundary exactly once.
+
+**The state vector** (439 float32s) is:
+
+- *Ego-centric.* Seat `k` is always "the player `k` seats after me", never
+  absolute seat `k`. Nothing a policy learns is seat-specific, and what it
+  learns at one seat transfers to every other.
+- *Padded to `MAX_PLAYERS`/`MAX_DEALS`* with explicit validity flags, so a
+  2-player game and a 6-player game have byte-identical shapes.
+- *Class counts, not card slots.* Hands and Collections are unordered sets,
+  so they are per-class tallies (12 classes) rather than one padded slot per
+  card — permutation invariant, and an order of magnitude smaller.
+- *Card counting.* Per-class tallies of what is in the discard pile and,
+  derived from the deck composition, what is still **unseen** (draw pile +
+  other players' hands + face-down deal cards). This is the sufficient
+  statistic a human card counter tracks, and it is exactly what a policy
+  needs to price a face-down deal.
+- *Memory.* The engine folds every rules `Event` into a per-seat behavioral
+  summary (Thingamabobs played, tokens gained/lost, cards stolen, sets
+  completed, turns led …) plus an exponentially decayed histogram of recent
+  event kinds (`engine/src/stats.rs`). A single micro-step observation is
+  otherwise a snapshot with no history, which makes this a deep POMDP —
+  "this seat has already dumped three Thingamabobs and stolen two tokens" is
+  exactly the sort of thing a good player tracks. Keeping the memory in the
+  engine gets it without a recurrent policy, which does not compose with
+  action masking in sb3-contrib anyway.
+- *A per-episode persona.* The last 8 slots are a random vector, drawn once
+  per seat per episode. A policy that is deterministic given the state plays
+  the same opening from the same deal every time — readable, exploitable,
+  and a poor explorer. Conditioning on a latent that is constant *within* an
+  episode but resampled *across* episodes lets one set of weights express a
+  family of coherent strategies and commit to one per game, rather than
+  re-rolling its personality on every micro-turn (which is all that sampling
+  from the action distribution gives you).
+
+**The action space** is `Discrete(n)` with an *ordinal* encoding: index `i`
+means "the i-th entry of `legal_actions()` right now". That avoids a
+combinatorially complete encoding of the nested `Action` type while keeping
+a fixed-shape space with an explicit mask (§3.4). Two consequences:
+
+- `n` is *derived*, not guessed: `GameState::max_legal_actions()` computes
+  the exact worst case from the deck composition and table size (116/117/171/234/306
+  for 2–6 players with the confirmed deck), so a custom `deck.toml` resizes
+  the policy head instead of silently truncating legal moves. Legal actions
+  are also deduplicated by card class — two Detrital Repositioners offer
+  identical menus — which cut the worst case from 919 to 306 without
+  removing a single distinct choice. Cards the acting player *cannot* see
+  are never deduplicated, since a class-collapsed count would leak how many
+  distinct kinds are hidden.
+- Because index `i` means something different in every state, the
+  observation also carries an `actions` matrix: one 43-float row per
+  candidate, describing what that action *does* (its type, which card
+  classes it commits, which seat it targets, how many face-down cards it
+  touches). `MaskablePointerPolicy` scores each candidate against the state
+  from its own description —
+  `logit(i) = <encode(action_i), query(state)> / sqrt(d) + bias(action_i)` —
+  the standard pointer/attention formulation. Without it, a policy head has
+  to reverse-engineer the engine's enumeration order out of the state before
+  its outputs can mean anything.
+
 ## Training an AI (self-play PPO)
 
-The easiest working recipe against the current env: [sb3-contrib](https://sb3-contrib.readthedocs.io/)'s
-`MaskablePPO` (PPO with invalid-action masking) trained via **self-play** —
-one shared policy plays every seat, since all seats are mechanically
-identical (§2.2). `SasquatchSelfPlayEnv` (`python/sell_me_a_sasquatch/selfplay_env.py`)
-wraps the multi-agent `AECEnv` as a single-agent `gymnasium.Env`: one "hero"
-seat (re-randomized every episode) is controlled by the RL policy, and every
-other seat's turn is played by an `opponent_policy` callback.
-
-**Opponent pool ("older models").** That callback is `OpponentPool`: each
-episode it's either the live in-training model, or a uniformly random older
-*frozen* snapshot of it (`current_prob` controls the mix, default 50/50).
-`scripts/train.py`'s `SnapshotCallback` saves a new snapshot into the pool
-every `--snapshot-every` timesteps. This matters because playing only ever
-against an exact mirror of your current self can cycle or over-fit to
-beating that mirror specifically rather than learning something robust —
-mixing in a handful of past selves gives a bit of curriculum/diversity, a
-small-scale version of the "league" idea behind AlphaStar/OpenAI Five's
-self-play.
-
-**Reward.** One reward function, not a sparse/dense choice: the terminal
-+1 (winner) / -1 (everyone else) from §3.4, plus a *potential-based* dense
-shaping term tracking each step's change in **lead margin** — own Point
-Tokens minus the best opponent's, the quantity that actually has to go
-positive to win (§2.6 requires being *strictly* ahead of everyone, not just
-accumulating tokens). Potential-based shaping (`gamma * phi(s') - phi(s)`,
-Ng/Harada/Russell 1999) is the standard way to add a denser per-step signal
-to a ~29-step sparse-terminal episode without changing what the optimal
-policy actually is, unlike an arbitrary bonus (e.g. an earlier version of
-this that rewarded raw own-token gains, ignoring whether opponents were
-catching up faster).
+One policy, every table size. [sb3-contrib](https://sb3-contrib.readthedocs.io/)'s
+`MaskablePPO` (PPO with invalid-action masking) with the pointer policy
+above, trained by self-play: `SasquatchSelfPlayEnv`
+(`python/sell_me_a_sasquatch/selfplay_env.py`) gives one "hero" seat to the
+learner and plays every other seat with an `opponent_policy` callback.
+Because the observation is padded and ego-centric, the env resamples the
+**table size** each episode too, so a single checkpoint plays 2- through
+6-player games — including the materially different 2-player variant (§2.7).
 
 ```sh
 cd python
 uv pip install -e ".[train]"     # stable-baselines3, sb3-contrib, torch
 
-uv run python scripts/train.py --num-players 4 --timesteps 300000 --n-envs 8 --out models/sasquatch_ppo_4p
-uv run python scripts/play.py models/sasquatch_ppo_4p.zip --num-players 4 --episodes 200
+uv run python scripts/train.py --timesteps 1000000 --out models/sasquatch_general
+uv run python scripts/play.py models/sasquatch_general.zip --episodes 300
 ```
 
-Continue training an existing checkpoint with `--resume path/to/model.zip`
-(timesteps keep counting up from the checkpoint's own total; the opponent
-pool's older snapshots from that checkpoint's own run are reloaded too, so
-"older models" survive across `--resume` calls — use a different `--out` if
-you want to keep the earlier checkpoint file around as well).
+`scripts/play.py` reports win rate per table size against the
+`1/num_players` chance baseline. A 400k-timestep run (about 4½ minutes on 12
+workers) already beats random opponents by 1.4x–2.7x chance at every table
+size:
 
-`scripts/play.py` reports the trained model's win rate against random-policy
-opponents (compare against the `1/num_players` random-chance baseline it
-also prints) or, with `--opponent self`, against a frozen copy of itself.
+| Players | Win rate | Chance | vs chance |
+|---|---|---|---|
+| 2 | 69.0% | 50.0% | 1.38x |
+| 3 | 66.7% | 33.3% | 2.00x |
+| 4 | 59.3% | 25.0% | 2.37x |
+| 5 | 50.7% | 20.0% | 2.53x |
+| 6 | 44.7% | 16.7% | 2.68x |
 
-Notes:
+**Parallelism.** Envs run in worker *processes* (`SubprocVecEnv`, one per
+core by default) — the engine holds no lock of its own to release, so
+threads would not help. Workers cannot call back into the live model, so
+each keeps its own opponent league of disk-loaded snapshots that
+`SnapshotCallback` refreshes; opponents are therefore up to
+`--snapshot-every` timesteps stale, which is exactly the "play slightly
+older versions of yourself" regime self-play wants. `--vec dummy` keeps
+everything in one process and uses the live model directly, which is the
+right choice for debugging and very small runs.
 
-- Self-play requires the opponent callback to call back into the live model
-  (and occasionally a loaded snapshot), so training runs single-process
-  (`DummyVecEnv`) rather than across subprocesses — `--n-envs` controls how
-  many env copies run in that one process, not worker processes.
-- `--opponent random` trains against a fixed random baseline instead of
-  self-play (no opponent pool either), which is faster to sanity-check but
-  produces a much weaker final policy (it never has to counter increasingly
-  sharp play).
-- The observation `Dict` space (`spaces.py`) is fixed-shape by construction
-  (§3.4), so `MaskablePPO`'s `MultiInputPolicy` (SB3's `CombinedExtractor`)
-  handles it directly — no custom feature extractor was needed. `MultiDiscrete`
-  subspaces are kept 1-D (e.g. `collections` is flattened rather than shaped
-  `(num_players, MAX_COLLECTION)`), since SB3's observation preprocessing
-  doesn't support multi-dimensional `nvec` arrays — this was the one
-  non-obvious fix needed to get `MaskablePPO` to accept the space at all.
-- Reasonable training runs (hundreds of thousands to a few million
-  timesteps) are a starting point for a self-play policy to develop
-  above-chance deal-evaluation and bluffing behavior, not a guarantee of
-  strong play; genuine multi-agent RL convergence guarantees don't apply to
-  this simple opponent-pool self-play setup. A 250k-timestep run measured
-  ~29% win rate vs. random opponents in 4-player games (25% = chance) —
-  a real but modest edge; more training, more snapshot diversity, and/or a
-  richer action encoding (see "Known limitations") would likely help more
-  than reward tuning alone at this point.
+**Opponent pool ("older models").** `OpponentPool` picks, once per episode,
+either the newest snapshot or a uniformly random older one (`--current-prob`
+controls the mix). Playing only ever against an exact mirror of your current
+self can cycle, or overfit to beating that mirror rather than learning
+something robust; mixing in past selves is the standard fix, a small-scale
+version of the league idea behind AlphaStar/OpenAI Five. Snapshots are
+converted to `NumpyPointerPolicy` — the same arithmetic as the torch policy
+(asserted in `tests/test_policy.py`), without torch's per-call overhead on
+batch-of-one observations. That matters because opponents take
+(table size − 1) moves for every one of the learner's.
+
+**Reward.** The terminal +1 (winner) / −1 (everyone else) from §3.4, plus a
+*potential-based* dense shaping term tracking each step's change in **lead
+margin** — own Point Tokens minus the best opponent's, the quantity that
+actually has to go positive to win (§2.6 requires being *strictly* ahead,
+not just accumulating tokens). Potential-based shaping
+(`gamma * phi(s') - phi(s)`, Ng/Harada/Russell 1999) is the standard way to
+add a denser per-step signal to a ~30-step sparse-terminal episode without
+changing what the optimal policy is, unlike an arbitrary bonus (e.g. an
+earlier version here that rewarded raw own-token gains, ignoring whether
+opponents were catching up faster).
+
+Other flags worth knowing:
+
+- `--players 4` (or any subset) pins training to specific table sizes. The
+  action space narrows to match, so such a checkpoint is *not* loadable at a
+  larger table — the default trains the general model.
+- `--resume path/to/model.zip` continues a checkpoint; timesteps keep
+  counting from its own total, and that run's opponent snapshots are
+  reloaded so the league survives across `--resume` calls.
+- `--opponent random` trains against a fixed random baseline (no league).
+  Faster to sanity-check, much weaker final policy — it never has to counter
+  increasingly sharp play.
+- Checkpoints trained against the previous observation format will not
+  load: the state vector, the action space width and the policy head all
+  changed. `scripts/play.py` and the web app both say so explicitly
+  rather than failing with a tensor-shape error mid-game.
+- Reasonable runs (hundreds of thousands to a few million timesteps) are a
+  starting point for above-chance deal evaluation and bluffing, not a
+  guarantee of strong play; genuine multi-agent RL convergence guarantees do
+  not apply to this opponent-pool setup.
 
 ## Web app
 
@@ -222,7 +302,13 @@ whatever `.zip` files exist under `python/models/` (including
   2–6 players, plus randomized episodes asserting no exceptions and a
   never-empty `action_mask` for any live agent.
 - `python/tests/test_selfplay_env.py`: the self-play training wrapper
-  (§"Training an AI") and `OpponentPool` bookkeeping.
+  (§"Training an AI"), mixed-table-size episodes, and `OpponentPool`
+  bookkeeping.
+- `python/tests/test_policy.py`: the pointer policy end to end through
+  `MaskablePPO` (rollout, bootstrap and update all take different paths
+  through the custom head), save/load round-tripping, and that
+  `NumpyPointerPolicy` computes the same logits as the torch original.
+  Skipped automatically if the `[train]` extra is not installed.
 - `python/tests/test_webapp.py`: the web app's three modes end-to-end via
   Flask's test client (random-policy path only — skipped automatically if
   `[web]` isn't installed).
@@ -232,6 +318,12 @@ Run everything:
 ```sh
 cargo test -p sasquatch-engine
 cd python && uv run pytest tests/ -q
+```
+
+Measure throughput (see "Performance"):
+
+```sh
+cd python && uv run python scripts/bench.py --engine --workers 8
 ```
 
 ## Rules assumptions to verify against the physical rulebook
@@ -282,31 +374,64 @@ for the exact scenario this fixes.
 
 ## Performance
 
-`cargo bench` measures full random-policy game rollouts against the
-confirmed 120-card deck (`configs/deck.toml`), single-threaded:
+Two numbers matter, and they are not the same one. `cargo bench` measures
+the pure Rust engine; `scripts/bench.py` measures what training actually
+consumes — the engine *plus* observation encoding, reward shaping and the
+Python environment around it.
 
-| Players | Time / game | Approx. games/sec |
-|---|---|---|
-| 2 | ~61 µs | ~16,000 |
-| 4 | ~94 µs | ~10,600 |
-| 6 | ~193 µs | ~5,200 |
+Rust engine, full random-policy games against the confirmed 120-card deck,
+single-threaded:
 
-This is well short of the >100k games/sec aim in the spec (§3.5). The
-current bottlenecks (not yet optimized, given the scope of this pass):
+| Players | Time / game | Games/sec | Micro-steps/sec |
+|---|---|---|---|
+| 2 | ~142 µs | ~7,000 | ~289,000 |
+| 4 | ~76 µs | ~13,000 | ~706,000 |
+| 6 | ~148 µs | ~6,800 | ~684,000 |
 
-- `legal_actions()` fully materializes every combination up front (e.g. all
-  3-card hand subsets, all Nasty-penalty card subsets) rather than lazily
-  enumerating or using a bitmask-based scheme.
-- Nasty/Creature trade-in scanning rescans each player's full Collection
-  from scratch after every single completed set (needed for correctness —
-  a stolen card can cascade into a new completion — but is more work than
-  a smarter incremental tracker would need).
-- `Vec::remove` (O(n) shift) is used throughout for hand/collection/deal
-  card removal instead of swap-remove or a slotted arena.
+The training environment, including the full observation + action-feature
+encoding, with random opponents (`uv run python scripts/bench.py`):
 
-None of this affects correctness; it's flagged here as follow-up work
-rather than addressed in this pass, since it would require reworking the
-core data structures.
+| Players | Learner steps/sec (1 proc) | (8 procs) | Episodes/sec (8 procs) |
+|---|---|---|---|
+| 2 | ~40,000 | ~160,000 | ~3,600 |
+| 4 | ~31,000 | ~159,000 | ~5,400 |
+| 6 | ~20,000 | ~97,000 | ~2,900 |
+
+That is roughly 8-9x the throughput this environment had before the encoding
+moved into Rust, from four changes:
+
+- **One FFI crossing per micro-step.** The observation used to be rebuilt
+  card by card in Python, calling back into Rust for each card's kind and
+  allocating a string every time. `Game.encode` now fills caller-owned numpy
+  buffers in one call.
+- **`Vec`-indexed cards.** `CardId`s are contiguous `0..n`, so the engine's
+  hottest lookup is an index, not a hash. Kinds live in their own array, so
+  the hot path never touches a card's `String` name.
+- **Fewer, deduplicated actions.** Collapsing mechanically identical options
+  by card class cut the worst-case legal-action count from 919 to 306 —
+  which is less enumeration per step *and* a smaller policy head.
+- **A cheaper Python hot path.** The deck is parsed once rather than per
+  episode; reward shaping reads Point Tokens directly instead of building a
+  whole filtered `Observation` per agent per step; and the action mask,
+  being a prefix of ones by construction, is rebuilt only when its width
+  changes.
+
+Remaining known hot spots, in rough order:
+
+- 2-player deal offers are the most expensive single enumeration in the
+  engine (~3.5 µs/micro-step against ~1.4 µs for other table sizes): every
+  split allocates two `Vec` piles, and there are up to 80 of them per offer.
+  A compact `[CardId; 3]` + keep-mask representation would remove that, at
+  the cost of a wider API change than this pass took on.
+- Trade-in scanning rescans a Collection from scratch after every completed
+  set. That is needed for correctness — a stolen card can cascade into a new
+  completion — but an incremental per-class tally would do less work.
+- `Vec::remove` (an O(n) shift) is still used for hand/Collection/deal
+  removal rather than swap-remove.
+
+At the training level, throughput is no longer bound by the environment at
+all: with 12 workers, PPO reaches ~2,900 timesteps/sec end to end, and the
+limit is the policy update on the main process, not rollout collection.
 
 ## Known limitations
 
@@ -323,3 +448,20 @@ core data structures.
   as the deck-composition unit tests.
 - **Option B (`ParallelEnv`) is not implemented** — only Option A (§3.4),
   the micro-stepped `AECEnv`, per the spec's "implement Option A first."
+- **A checkpoint's action-space width is fixed by the table sizes it was
+  trained on.** `--players 4` produces a 171-wide head, which cannot be
+  evaluated at a 6-player table (306). The default trains across every
+  table size, so the general checkpoint plays all of them; `scripts/play.py`
+  sizes its env from the loaded model rather than from the table.
+- **Worker-process opponents are stale by up to `--snapshot-every`
+  timesteps.** `SubprocVecEnv` workers cannot hold the live model, so the
+  league is refreshed from disk. This is a deliberate trade (parallelism for
+  slightly older opponents, which self-play wants anyway), but it does mean
+  `--current-prob` means "newest snapshot", not "live model", unless you run
+  `--vec dummy`.
+- **The memory features are a summary, not a transcript.** Per-seat counters
+  and a decayed event histogram capture *how* a seat has been playing, but
+  not the exact sequence - a policy cannot, say, recall which specific card
+  an opponent revealed four turns ago. A recurrent policy would, but
+  sb3-contrib's `RecurrentPPO` and `MaskablePPO` do not compose, so that
+  would mean writing the maskable-recurrent combination from scratch.

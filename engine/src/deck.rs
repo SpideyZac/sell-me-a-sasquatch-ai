@@ -266,13 +266,13 @@ mod tests {
             let copies = deck.cards.iter().filter(|c| c.kind == CardKind::Creature(tier)).count() as u32;
             let set_size = deck.catalog.creature_set_size(tier);
             assert!(set_size > 0);
-            assert!(copies % set_size == 0, "{tier} copies {copies} not divisible by set_size {set_size}");
+            assert!(copies.is_multiple_of(set_size), "{tier} copies {copies} not divisible by set_size {set_size}");
         }
         for kind in NastyKind::ALL {
             let copies = deck.cards.iter().filter(|c| c.kind == CardKind::Nasty(kind)).count() as u32;
             let set_size = deck.catalog.nasty_set_size(kind);
             assert!(set_size > 0);
-            assert!(copies % set_size == 0, "{} copies {copies} not divisible by set_size {set_size}", kind.name());
+            assert!(copies.is_multiple_of(set_size), "{} copies {copies} not divisible by set_size {set_size}", kind.name());
         }
     }
 

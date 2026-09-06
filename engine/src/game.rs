@@ -2,7 +2,7 @@
 //! point, `apply_action`, that returns structured `Event`s. No I/O.
 
 use crate::action::{Action, ThingamabobParams};
-use crate::card::{Card, CardId, CardKind, NastyKind, PlayerId, Tier, ThingamabobEffect, ThingamabobKind, NastyEffect};
+use crate::card::{Card, CardId, CardKind, NastyEffect, NastyKind, PlayerId, ThingamabobEffect, ThingamabobKind, Tier, NUM_CARD_CLASSES};
 use crate::deal::Deal;
 use crate::deck::{Catalog, DeckConfig};
 use crate::phase::{
@@ -11,7 +11,8 @@ use crate::phase::{
 };
 use crate::player::{try_take_cards, try_take_point_tokens, Player};
 use crate::rng::GameRng;
-use std::collections::{HashMap, HashSet};
+use crate::stats::{event_kind_index, PlayerStats, EVENT_MEMORY_DECAY, NUM_EVENT_KINDS};
+use std::collections::HashMap;
 use thiserror::Error;
 
 pub const HAND_SIZE: usize = 5;
@@ -129,26 +130,46 @@ pub struct Observation {
 }
 
 pub struct GameState {
-    catalog: Catalog,
-    cards: HashMap<CardId, Card>,
-    mode: GameMode,
-    num_players: usize,
-    win_threshold: u32,
-    players: Vec<Player>,
-    draw_pile: Vec<CardId>,
-    discard_pile: Vec<CardId>,
-    deals: Vec<Deal>,
-    turn_leader: PlayerId,
-    phase: Phase,
+    pub(crate) catalog: Catalog,
+    /// Indexed by `CardId` (deck ids are contiguous `0..n`) rather than
+    /// hashed - card lookup is the hottest operation in the engine.
+    pub(crate) cards: Vec<Card>,
+    /// `cards[i].kind`, split out so the hot path never touches the `String`
+    /// name field's cache line.
+    pub(crate) kinds: Vec<CardKind>,
+    pub(crate) mode: GameMode,
+    pub(crate) num_players: usize,
+    pub(crate) win_threshold: u32,
+    pub(crate) players: Vec<Player>,
+    pub(crate) draw_pile: Vec<CardId>,
+    pub(crate) discard_pile: Vec<CardId>,
+    pub(crate) deals: Vec<Deal>,
+    pub(crate) turn_leader: PlayerId,
+    pub(crate) phase: Phase,
     rng: GameRng,
+    /// True composition of the deck per card class. Constant for a game; the
+    /// denominator of the observation's card-counting features.
+    pub(crate) deck_counts: [u32; NUM_CARD_CLASSES],
+    /// Turns completed so far - lets a policy tell an opening from an endgame.
+    pub(crate) turn_index: u32,
+    /// Deck- and table-size-derived ceiling on the legal-action count; see
+    /// `max_legal_actions`.
+    max_legal_actions: usize,
+    /// Per-player running behavioral summary (see `stats.rs`): the engine's
+    /// half of an agent's memory, so a policy can condition on what each seat
+    /// has *done* this game, not only on the current tableau.
+    pub(crate) stats: Vec<PlayerStats>,
+    /// Exponentially decayed histogram of recent event kinds - a compact
+    /// "what just happened" trace over the last handful of micro-steps.
+    pub(crate) event_memory: [f32; NUM_EVENT_KINDS],
     /// Live-tracking support (`pin_kind`): remaining not-yet-pinned supply of
     /// each kind, seeded from the deck's true composition. Cards start with
     /// an arbitrary (random) kind from the shuffle; `pin_kind` overwrites it
     /// once, when the card is actually revealed at the table, so all of the
     /// engine's own bookkeeping (set completion, tokens, discards) runs on
     /// truth instead of the random deal.
-    kind_supply: HashMap<CardKind, u32>,
-    pinned: HashSet<CardId>,
+    kind_supply: [u32; NUM_CARD_CLASSES],
+    pinned: Vec<bool>,
 }
 
 impl GameState {
@@ -183,11 +204,18 @@ impl GameState {
         let mut ids: Vec<CardId> = deck.cards.iter().map(|c| c.id).collect();
         rng.shuffle(&mut ids);
 
-        let cards: HashMap<CardId, Card> = deck.cards.into_iter().map(|c| (c.id, c)).collect();
-        let mut kind_supply: HashMap<CardKind, u32> = HashMap::new();
-        for c in cards.values() {
-            *kind_supply.entry(c.kind).or_insert(0) += 1;
+        let mut cards = deck.cards;
+        cards.sort_unstable_by_key(|c| c.id);
+        debug_assert!(
+            cards.iter().enumerate().all(|(i, c)| c.id as usize == i),
+            "deck card ids must be contiguous 0..n for Vec-indexed lookup"
+        );
+        let kinds: Vec<CardKind> = cards.iter().map(|c| c.kind).collect();
+        let mut kind_supply = [0u32; NUM_CARD_CLASSES];
+        for &k in &kinds {
+            kind_supply[k.class_index()] += 1;
         }
+        let deck_counts = kind_supply;
 
         let mut players: Vec<Player> = (0..num_players).map(|_| Player::new()).collect();
         let mut cursor = 0usize;
@@ -205,9 +233,12 @@ impl GameState {
         };
         let turn_leader = starting_leader.unwrap_or_else(|| rng.gen_index(num_players));
 
+        let num_cards = cards.len();
+        let catalog = deck.catalog;
         let mut game = GameState {
-            catalog: deck.catalog,
+            catalog: catalog.clone(),
             cards,
+            kinds,
             mode,
             num_players,
             win_threshold,
@@ -218,8 +249,13 @@ impl GameState {
             turn_leader,
             phase: Phase::GameOver { winner: 0 }, // placeholder, overwritten by start_new_turn
             rng,
+            deck_counts,
+            turn_index: 0,
+            max_legal_actions: Self::compute_max_legal_actions(&catalog, &deck_counts, mode, num_players),
+            stats: vec![PlayerStats::default(); num_players],
+            event_memory: [0.0; NUM_EVENT_KINDS],
             kind_supply,
-            pinned: HashSet::new(),
+            pinned: vec![false; num_cards],
         };
         game.start_new_turn();
         Ok(game)
@@ -257,11 +293,99 @@ impl GameState {
     }
 
     pub fn card_kind(&self, id: CardId) -> Option<CardKind> {
-        self.cards.get(&id).map(|c| c.kind)
+        self.kinds.get(id as usize).copied()
+    }
+
+    /// Unchecked hot-path variant of `card_kind`, for ids the engine itself
+    /// produced (every id in a hand/Collection/deal/pile is by construction a
+    /// valid index).
+    #[inline]
+    pub(crate) fn kind_of(&self, id: CardId) -> CardKind {
+        self.kinds[id as usize]
+    }
+
+    #[inline]
+    pub(crate) fn class_of(&self, id: CardId) -> usize {
+        self.kinds[id as usize].class_index()
     }
 
     pub fn card_name(&self, id: CardId) -> Option<&str> {
-        self.cards.get(&id).map(|c| c.name.as_str())
+        self.cards.get(id as usize).map(|c| c.name.as_str())
+    }
+
+    /// True composition of the deck per card class - the denominator for the
+    /// observation's "what is still out there" card-counting features.
+    pub fn deck_counts(&self) -> &[u32; NUM_CARD_CLASSES] {
+        &self.deck_counts
+    }
+
+    pub fn turn_index(&self) -> u32 {
+        self.turn_index
+    }
+
+    /// Exact upper bound on `legal_actions(..).len()` for this deck and
+    /// table size, derived from the deck composition rather than guessed.
+    ///
+    /// The RL action space is *ordinal* - index `i` means "the i-th entry of
+    /// `legal_actions()` right now" - so it has to be wide enough that no
+    /// legal action is ever unreachable, and no wider, since every unused
+    /// slot is dead weight in the policy head. Deriving it here means a
+    /// custom `deck.toml` resizes the action space automatically instead of
+    /// silently truncating.
+    pub fn max_legal_actions(&self) -> usize {
+        self.max_legal_actions
+    }
+
+    fn compute_max_legal_actions(catalog: &Catalog, deck_counts: &[u32; NUM_CARD_CLASSES], mode: GameMode, num_players: usize) -> usize {
+        // Worst case a deal pool can reach: every deal at its initial 3
+        // cards, plus one extra per Cryptozooptic Expander in the deck (each
+        // adds exactly one hand card to some deal). Removal effects only
+        // shrink it.
+        let max_deals = match mode {
+            GameMode::Buyer => num_players - 1,
+            GameMode::TwoPlayer => 2,
+        };
+        let expanders = deck_counts[CardKind::Thingamabob(ThingamabobKind::CryptozooticExpander).class_index()] as usize;
+        let deal_cards = 3 * max_deals + expanders;
+
+        let mut thingamabob_window = 1; // Pass
+        for kind in ThingamabobKind::ALL {
+            if deck_counts[CardKind::Thingamabob(kind).class_index()] == 0 {
+                continue;
+            }
+            // One representative card per class - `legal_actions` dedups the
+            // rest away.
+            thingamabob_window += match catalog.thingamabob_effect(kind) {
+                ThingamabobEffect::StealPointTokenFromRicherPlayer => num_players - 1,
+                ThingamabobEffect::RemoveCardsFromDeals { max_cards, .. } => {
+                    (0..=max_cards as usize).map(|k| binomial(deal_cards, k)).sum()
+                }
+                ThingamabobEffect::AddHiddenHandCardToDeal => HAND_SIZE.min(NUM_CARD_CLASSES) * max_deals,
+                ThingamabobEffect::RevealCardInDeal => deal_cards,
+            };
+        }
+
+        // Nasty penalty targets are class-deduped, so the count is the
+        // number of distinct class multisets of size <= the steal cap.
+        let max_steal = catalog
+            .nasty_effect
+            .values()
+            .map(|e| match e {
+                NastyEffect::BuyerMayStealUpToNCards(n) => *n as usize,
+                NastyEffect::BuyerStealsOnePointToken => 0,
+            })
+            .max()
+            .unwrap_or(0);
+        let nasty_resolution: usize = (0..=max_steal).map(|k| binomial(NUM_CARD_CLASSES + k.saturating_sub(1), k)).sum();
+
+        let deal_offer = match mode {
+            GameMode::Buyer => binomial(HAND_SIZE, 3),
+            // Each 3-card pick crossed with the 2^3 ways to assign those
+            // cards to the two piles (§2.7).
+            GameMode::TwoPlayer => binomial(HAND_SIZE, 3) * 8,
+        };
+
+        [thingamabob_window, nasty_resolution, deal_offer, max_deals, 3, 2].into_iter().max().unwrap_or(1)
     }
 
     pub fn player_hand(&self, player: PlayerId) -> &[CardId] {
@@ -285,13 +409,18 @@ impl GameState {
     }
 
     pub fn is_pinned(&self, card: CardId) -> bool {
-        self.pinned.contains(&card)
+        self.pinned.get(card as usize).copied().unwrap_or(false)
     }
 
     /// Remaining not-yet-pinned supply per kind (how many more cards of that
     /// kind could still be truthfully assigned via `pin_kind`).
-    pub fn kind_supply(&self) -> &HashMap<CardKind, u32> {
-        &self.kind_supply
+    pub fn kind_supply(&self) -> HashMap<CardKind, u32> {
+        let kinds = Tier::ALL
+            .iter()
+            .map(|&t| CardKind::Creature(t))
+            .chain(NastyKind::ALL.iter().map(|&k| CardKind::Nasty(k)))
+            .chain(ThingamabobKind::ALL.iter().map(|&k| CardKind::Thingamabob(k)));
+        kinds.map(|k| (k, self.kind_supply[k.class_index()])).collect()
     }
 
     /// For live-tracking a physical game (see `kind_supply` field docs):
@@ -302,18 +431,19 @@ impl GameState {
     /// Thingamabob effects, tokens, discards) reads `card_kind` normally
     /// afterward, so once pinned a card behaves exactly like a "real" one.
     pub fn pin_kind(&mut self, card: CardId, kind: CardKind) -> Result<(), PinError> {
-        if !self.cards.contains_key(&card) {
+        if card as usize >= self.cards.len() {
             return Err(PinError::UnknownCard(card));
         }
-        if self.pinned.contains(&card) {
+        if self.pinned[card as usize] {
             return Err(PinError::AlreadyPinned(card));
         }
-        let remaining = self.kind_supply.get_mut(&kind).ok_or(PinError::NoSupplyRemaining)?;
+        let remaining = &mut self.kind_supply[kind.class_index()];
         if *remaining == 0 {
             return Err(PinError::NoSupplyRemaining);
         }
         *remaining -= 1;
-        let entry = self.cards.get_mut(&card).expect("checked above");
+        self.kinds[card as usize] = kind;
+        let entry = &mut self.cards[card as usize];
         entry.kind = kind;
         // `name` is a separate field, set once at deck-build time for
         // whatever kind the card *originally, randomly* got - it must be
@@ -327,7 +457,7 @@ impl GameState {
             CardKind::Nasty(k) => k.name().to_string(),
             CardKind::Thingamabob(k) => k.name().to_string(),
         };
-        self.pinned.insert(card);
+        self.pinned[card as usize] = true;
         Ok(())
     }
 
@@ -380,23 +510,26 @@ impl GameState {
 
     // active player / legality
 
-    pub fn active_players(&self) -> Vec<PlayerId> {
+    /// The single seat to act right now, if any. Every phase is a
+    /// micro-turn belonging to exactly one player (§3.4), so this - not the
+    /// allocating `active_players` - is what the engine itself uses.
+    pub fn active_player(&self) -> Option<PlayerId> {
         match &self.phase {
-            Phase::DealOffer(s) => {
-                if s.is_done() {
-                    vec![]
-                } else {
-                    vec![s.current().player]
-                }
-            }
-            Phase::TwoPlayerDealOffer(_) => vec![self.turn_leader],
-            Phase::BuyerPeek => vec![self.turn_leader],
-            Phase::ThingamabobWindow(s) => vec![s.current_player()],
-            Phase::BuyerChoosesDeal => vec![self.turn_leader],
-            Phase::RespondToDeal => vec![1 - self.turn_leader],
-            Phase::NastyResolution(s) => vec![self.nasty_beneficiary(s.pending.player)],
-            Phase::GameOver { .. } => vec![],
+            Phase::DealOffer(s) => (!s.is_done()).then(|| s.current().player),
+            Phase::TwoPlayerDealOffer(_) => Some(self.turn_leader),
+            Phase::BuyerPeek => Some(self.turn_leader),
+            Phase::ThingamabobWindow(s) => Some(s.current_player()),
+            Phase::BuyerChoosesDeal => Some(self.turn_leader),
+            Phase::RespondToDeal => Some(1 - self.turn_leader),
+            Phase::NastyResolution(s) => Some(self.nasty_beneficiary(s.pending.player)),
+            Phase::GameOver { .. } => None,
         }
+    }
+
+    /// PettingZoo-shaped view of `active_player` (§3.4 keeps the door open
+    /// for a simultaneous-phase variant with more than one active seat).
+    pub fn active_players(&self) -> Vec<PlayerId> {
+        self.active_player().into_iter().collect()
     }
 
     /// Who resolves a completed Nasty set belonging to `loser` (§2.4): in
@@ -416,7 +549,7 @@ impl GameState {
         }
     }
 
-    fn deal_for_seller(&self, seller: PlayerId) -> Option<&Deal> {
+    pub(crate) fn deal_for_seller(&self, seller: PlayerId) -> Option<&Deal> {
         self.deals.iter().find(|d| d.seller == seller)
     }
 
@@ -424,26 +557,46 @@ impl GameState {
         self.deals.iter_mut().find(|d| d.seller == seller)
     }
 
+    /// Legal actions for `player`, **deduplicated by card class**.
+    ///
+    /// Two cards of the same class are mechanically interchangeable (§2.4:
+    /// Creatures carry no individual behavior, and a second Detrital
+    /// Repositioner does exactly what the first one does), so enumerating
+    /// one option per distinct card *id* produces large blocks of literally
+    /// equivalent actions. Collapsing them shrinks the worst case by ~3x -
+    /// which shrinks the policy's action space, the per-step enumeration
+    /// cost, and the number of indistinguishable choices a learner has to
+    /// waste probability mass on.
+    ///
+    /// The dedup only ever applies to cards the acting player can already
+    /// see (their own hand, their own just-submitted deal, public
+    /// Collections). Still-hidden cards in a deal stay one option each: the
+    /// *count* of options there is public (`num_hidden`), while a
+    /// class-deduped count would leak how many distinct kinds are hidden.
     pub fn legal_actions(&self, player: PlayerId) -> Vec<Action> {
-        if !self.active_players().contains(&player) {
-            return vec![];
+        if self.active_player() != Some(player) {
+            return Vec::new();
         }
         match &self.phase {
             Phase::DealOffer(s) => {
                 if s.step == DealOfferStep::AwaitingSubmit {
-                    combinations(&self.players[player].hand, 3)
+                    self.class_distinct_combinations(&self.players[player].hand, 3)
                         .into_iter()
                         .map(|c| Action::SubmitDeal { cards: [c[0], c[1], c[2]] })
                         .collect()
                 } else {
                     let deal = self.deal_for_seller(player).expect("submitted deal must exist");
-                    deal.cards.iter().map(|c| Action::RevealCard { card: c.card }).collect()
+                    let cards: Vec<CardId> = deal.cards.iter().map(|c| c.card).collect();
+                    self.class_distinct(&cards).into_iter().map(|card| Action::RevealCard { card }).collect()
                 }
             }
             Phase::TwoPlayerDealOffer(s) => match s.step {
                 TwoPlayerDealStep::AwaitingSplit => self.legal_two_player_splits(player),
                 TwoPlayerDealStep::AwaitingReveal => {
-                    self.deals.iter().flat_map(|d| d.cards.iter().map(|c| Action::RevealCard { card: c.card })).collect()
+                    // Both piles are the active player's own just-offered
+                    // cards, so they are fully known to them - dedup applies.
+                    let cards: Vec<CardId> = self.deals.iter().flat_map(|d| d.cards.iter().map(|c| c.card)).collect();
+                    self.class_distinct(&cards).into_iter().map(|card| Action::RevealCard { card }).collect()
                 }
             },
             Phase::BuyerPeek => self.deals.iter().map(|d| Action::BuyerPeek { target_seller: d.seller }).collect(),
@@ -455,14 +608,69 @@ impl GameState {
                     NastyEffect::BuyerMayStealUpToNCards(max) => max,
                     NastyEffect::BuyerStealsOnePointToken => 0, // never queued (auto-resolved)
                 };
-                let target_collection = &self.players[s.pending.player].collection;
+                // Collections are public, so class-deduping the steal
+                // targets hides nothing the thief could otherwise see.
+                let target_collection = self.players[s.pending.player].collection.clone();
                 (0..=max)
-                    .flat_map(|k| combinations(target_collection, k as usize))
+                    .flat_map(|k| self.class_distinct_combinations(&target_collection, k as usize))
                     .map(|cards| Action::ResolveNastyPenalty { taken_cards: cards })
                     .collect()
             }
-            Phase::GameOver { .. } => vec![],
+            Phase::GameOver { .. } => Vec::new(),
         }
+    }
+
+    /// How many actions `legal_actions(player)` would return. Kept as its own
+    /// entry point so callers that only need the action-mask width (the RL
+    /// wrapper, every step) do not have to look at the actions themselves.
+    pub fn legal_action_count(&self, player: PlayerId) -> usize {
+        self.legal_actions(player).len()
+    }
+
+    /// One representative card id per distinct class, preserving order.
+    fn class_distinct(&self, cards: &[CardId]) -> Vec<CardId> {
+        let mut seen = [false; NUM_CARD_CLASSES];
+        let mut out = Vec::with_capacity(cards.len().min(NUM_CARD_CLASSES));
+        for &c in cards {
+            let class = self.class_of(c);
+            if !seen[class] {
+                seen[class] = true;
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// `combinations(cards, k)`, keeping only the first combination for each
+    /// distinct *multiset of classes* (so picking Tiny+Tiny+Big is offered
+    /// once, however many interchangeable Tiny cards back it).
+    fn class_distinct_combinations(&self, cards: &[CardId], k: usize) -> Vec<Vec<CardId>> {
+        let mut seen: Vec<u64> = Vec::new();
+        let mut out = Vec::new();
+        for combo in combinations(cards, k) {
+            let key = self.class_multiset_key(&combo);
+            if !seen.contains(&key) {
+                seen.push(key);
+                out.push(combo);
+            }
+        }
+        out
+    }
+
+    /// Packs a card multiset into one integer: four bits of count per class.
+    ///
+    /// Deduplication runs inside the legal-action enumerator, which is the
+    /// engine's hottest loop, so the key has to be allocation-free - an
+    /// earlier sorted-`Vec<u8>` version cost more than the duplicate actions
+    /// it was removing.
+    #[inline]
+    fn class_multiset_key(&self, cards: &[CardId]) -> u64 {
+        debug_assert!(cards.len() <= 15, "four bits per class holds at most 15 of a kind");
+        let mut key = 0u64;
+        for &card in cards {
+            key += 1u64 << (4 * self.class_of(card));
+        }
+        key
     }
 
     /// Every way the active player can split exactly 3 of their own hand
@@ -473,8 +681,25 @@ impl GameState {
     /// on which side is itself a real, distinct choice).
     fn legal_two_player_splits(&self, player: PlayerId) -> Vec<Action> {
         let mut actions = Vec::new();
-        for combo in combinations(&self.players[player].hand, 3) {
+        let mut seen: Vec<(u64, u64)> = Vec::new();
+        for combo in self.class_distinct_combinations(&self.players[player].hand, 3) {
+            let combo_key = self.class_multiset_key(&combo);
             for mask in 0u8..8 {
+                // Which *class* lands on which side is the real decision, so
+                // the offered classes plus which of them are kept identify
+                // the offer; masks that only shuffle interchangeable cards
+                // between the same two sides are the same offer.
+                let mut own_key = 0u64;
+                for (i, &card) in combo.iter().enumerate() {
+                    if mask & (1 << i) != 0 {
+                        own_key += 1u64 << (4 * self.class_of(card));
+                    }
+                }
+                if seen.contains(&(combo_key, own_key)) {
+                    continue;
+                }
+                seen.push((combo_key, own_key));
+
                 let mut own_pile = Vec::new();
                 let mut other_pile = Vec::new();
                 for (i, &card) in combo.iter().enumerate() {
@@ -492,12 +717,19 @@ impl GameState {
 
     fn legal_thingamabob_actions(&self, player: PlayerId) -> Vec<Action> {
         let mut actions = vec![Action::PassThingamabobWindow];
-        let collection = self.players[player].collection.clone();
-        for card in collection {
-            let kind = match self.cards[&card].kind {
+        // One representative per Thingamabob class: a second copy of the
+        // same card offers an identical menu.
+        let mut seen_kind = [false; NUM_CARD_CLASSES];
+        for &card in &self.players[player].collection {
+            let kind = match self.kind_of(card) {
                 CardKind::Thingamabob(k) => k,
                 _ => continue,
             };
+            let class = self.kind_of(card).class_index();
+            if seen_kind[class] {
+                continue;
+            }
+            seen_kind[class] = true;
             let effect = self.catalog.thingamabob_effect(kind);
             match effect {
                 ThingamabobEffect::StealPointTokenFromRicherPlayer => {
@@ -517,7 +749,9 @@ impl GameState {
                     }
                 }
                 ThingamabobEffect::AddHiddenHandCardToDeal => {
-                    for &hand_card in &self.players[player].hand {
+                    // The player picks which of their own cards to give away,
+                    // so identical hand cards are one choice, not several.
+                    for hand_card in self.class_distinct(&self.players[player].hand) {
                         for deal in &self.deals {
                             actions.push(Action::PlayThingamabob {
                                 card,
@@ -553,8 +787,11 @@ impl GameState {
         let mut results = Vec::new();
         for k in 0..=max_cards as usize {
             for combo in combinations(&all_targets, k) {
-                let distinct_deals: std::collections::HashSet<PlayerId> = combo.iter().map(|(s, _)| *s).collect();
-                if distinct_deals.len() as u8 <= max_deals {
+                // `combinations` preserves order and `all_targets` is grouped
+                // by deal, so distinct sellers are just the runs in `combo` -
+                // no set allocation needed per candidate.
+                let distinct_deals = combo.windows(2).filter(|w| w[0].0 != w[1].0).count() + usize::from(!combo.is_empty());
+                if distinct_deals <= max_deals as usize {
                     results.push(combo);
                 }
             }
@@ -568,11 +805,11 @@ impl GameState {
         if self.is_game_over() {
             return Err(RulesError::GameAlreadyOver);
         }
-        if !self.active_players().contains(&player) {
+        if self.active_player() != Some(player) {
             return Err(RulesError::NotActivePlayer(player));
         }
 
-        match action {
+        let events = match action {
             Action::SubmitDeal { cards } => self.apply_submit_deal(player, cards),
             Action::TwoPlayerSubmitDeal { own_pile, other_pile } => self.apply_two_player_submit_deal(player, own_pile, other_pile),
             Action::RevealCard { card } => self.apply_reveal_card(player, card),
@@ -582,6 +819,24 @@ impl GameState {
             Action::ChooseDeal { seller } => self.apply_choose_deal(player, seller),
             Action::RespondToDeal { reverse } => self.apply_respond_to_deal(player, reverse),
             Action::ResolveNastyPenalty { taken_cards } => self.apply_resolve_nasty_penalty(player, taken_cards),
+        }?;
+        self.remember(&events);
+        Ok(events)
+    }
+
+    /// Folds a micro-step's events into the episode memory the observation
+    /// encoder exposes (see `stats.rs`). A rules error leaves state
+    /// untouched and so never reaches here.
+    fn remember(&mut self, events: &[Event]) {
+        for slot in self.event_memory.iter_mut() {
+            *slot *= EVENT_MEMORY_DECAY;
+        }
+        for event in events {
+            self.event_memory[event_kind_index(event)] += 1.0;
+            crate::stats::record(&mut self.stats, event);
+            if matches!(event, Event::TurnLeaderPassed { .. }) {
+                self.turn_index += 1;
+            }
         }
     }
 
@@ -738,7 +993,7 @@ impl GameState {
         if !self.players[player].collection.contains(&card) {
             return Err(RulesError::CardNotInCollection(card));
         }
-        let kind = match self.cards[&card].kind {
+        let kind = match self.kind_of(card) {
             CardKind::Thingamabob(k) => k,
             _ => return Err(RulesError::NotAThingamabob(card)),
         };
@@ -888,7 +1143,7 @@ impl GameState {
             'scan: for player in 0..self.num_players {
                 for kind in configured_kinds.iter().copied() {
                     let set_size = self.catalog.nasty_set_size(kind);
-                    let count = self.players[player].collection.iter().filter(|&&c| self.cards[&c].kind == CardKind::Nasty(kind)).count();
+                    let count = self.players[player].collection.iter().filter(|&&c| self.kind_of(c) == CardKind::Nasty(kind)).count();
                     if count as u32 >= set_size {
                         found = Some((player, kind, set_size));
                         break 'scan;
@@ -901,7 +1156,7 @@ impl GameState {
                 .collection
                 .iter()
                 .copied()
-                .filter(|&c| self.cards[&c].kind == CardKind::Nasty(kind))
+                .filter(|&c| self.kind_of(c) == CardKind::Nasty(kind))
                 .take(set_size as usize)
                 .collect();
             for &c in &to_discard {
@@ -968,7 +1223,7 @@ impl GameState {
             for tier in configured_tiers.iter().copied() {
                 let set_size = self.catalog.creature_set_size(tier);
                 loop {
-                    let count = self.players[player].collection.iter().filter(|&&c| self.cards[&c].kind == CardKind::Creature(tier)).count();
+                    let count = self.players[player].collection.iter().filter(|&&c| self.kind_of(c) == CardKind::Creature(tier)).count();
                     if (count as u32) < set_size {
                         break;
                     }
@@ -976,7 +1231,7 @@ impl GameState {
                         .collection
                         .iter()
                         .copied()
-                        .filter(|&c| self.cards[&c].kind == CardKind::Creature(tier))
+                        .filter(|&c| self.kind_of(c) == CardKind::Creature(tier))
                         .take(set_size as usize)
                         .collect();
                     for &c in &to_discard {
@@ -1066,6 +1321,19 @@ impl GameState {
             winner: self.winner(),
         }
     }
+}
+
+/// `n choose k`, saturating rather than overflowing on absurd inputs.
+fn binomial(n: usize, k: usize) -> usize {
+    if k > n {
+        return 0;
+    }
+    let k = k.min(n - k);
+    let mut result: usize = 1;
+    for i in 0..k {
+        result = result.saturating_mul(n - i) / (i + 1);
+    }
+    result
 }
 
 /// All k-element combinations of `items`, preserving relative order.

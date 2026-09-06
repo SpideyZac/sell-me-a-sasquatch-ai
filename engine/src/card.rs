@@ -179,3 +179,90 @@ pub struct Card {
     /// just the canonical card name.
     pub name: String,
 }
+
+/// Number of distinct *card classes* - the coarse bucket a policy actually
+/// reasons about (tier for Creatures, kind for Nasties/Thingamabobs).
+/// Individual card ids are meaningless to a learner (they're an arbitrary
+/// per-episode shuffle artifact), so every observation feature is expressed
+/// as counts over these classes.
+pub const NUM_CARD_CLASSES: usize = 12;
+
+/// Stable class ordering. Index here == index everywhere else (observation
+/// encoder, Python `spaces.CARD_CLASS_NAMES`, deck-composition vectors).
+pub const CARD_CLASS_NAMES: [&str; NUM_CARD_CLASSES] = [
+    "Creature:Giant",
+    "Creature:Big",
+    "Creature:Medium",
+    "Creature:Tiny",
+    "Nasty:Poison Pill Bug",
+    "Nasty:Loan Shark",
+    "Nasty:Trojan Horse",
+    "Thingamabob:Platonic Isolator",
+    "Thingamabob:Detrital Repositioner",
+    "Thingamabob:Super Detrital Repositioner",
+    "Thingamabob:Cryptozooptic Expander",
+    "Thingamabob:Spectroelectric Optimeter",
+];
+
+impl CardKind {
+    /// This kind's index into a `NUM_CARD_CLASSES`-wide count vector.
+    pub const fn class_index(self) -> usize {
+        match self {
+            CardKind::Creature(Tier::Giant) => 0,
+            CardKind::Creature(Tier::Big) => 1,
+            CardKind::Creature(Tier::Medium) => 2,
+            CardKind::Creature(Tier::Tiny) => 3,
+            CardKind::Nasty(NastyKind::PoisonPillBug) => 4,
+            CardKind::Nasty(NastyKind::LoanShark) => 5,
+            CardKind::Nasty(NastyKind::TrojanHorse) => 6,
+            CardKind::Thingamabob(ThingamabobKind::PlatonicIsolator) => 7,
+            CardKind::Thingamabob(ThingamabobKind::DetritalRepositioner) => 8,
+            CardKind::Thingamabob(ThingamabobKind::SuperDetritalRepositioner) => 9,
+            CardKind::Thingamabob(ThingamabobKind::CryptozooticExpander) => 10,
+            CardKind::Thingamabob(ThingamabobKind::SpectroelectricOptimeter) => 11,
+        }
+    }
+
+    pub fn name(self) -> String {
+        match self {
+            CardKind::Creature(tier) => format!("Creature:{tier}"),
+            CardKind::Nasty(kind) => format!("Nasty:{}", kind.name()),
+            CardKind::Thingamabob(kind) => format!("Thingamabob:{}", kind.name()),
+        }
+    }
+
+    /// Inverse of `name` - parses e.g. `"Creature:Tiny"` back into a kind.
+    pub fn parse(s: &str) -> Option<CardKind> {
+        let (prefix, rest) = s.split_once(':')?;
+        match prefix {
+            "Creature" => Tier::parse(rest).map(CardKind::Creature),
+            "Nasty" => NastyKind::parse(rest).map(CardKind::Nasty),
+            "Thingamabob" => ThingamabobKind::parse(rest).map(CardKind::Thingamabob),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod class_tests {
+    use super::*;
+
+    #[test]
+    fn class_index_matches_name_table_and_round_trips() {
+        let mut seen = [false; NUM_CARD_CLASSES];
+        let all: Vec<CardKind> = Tier::ALL
+            .iter()
+            .map(|&t| CardKind::Creature(t))
+            .chain(NastyKind::ALL.iter().map(|&k| CardKind::Nasty(k)))
+            .chain(ThingamabobKind::ALL.iter().map(|&k| CardKind::Thingamabob(k)))
+            .collect();
+        assert_eq!(all.len(), NUM_CARD_CLASSES);
+        for kind in all {
+            let i = kind.class_index();
+            assert!(!seen[i], "duplicate class index {i}");
+            seen[i] = true;
+            assert_eq!(CARD_CLASS_NAMES[i], kind.name());
+            assert_eq!(CardKind::parse(&kind.name()), Some(kind));
+        }
+    }
+}

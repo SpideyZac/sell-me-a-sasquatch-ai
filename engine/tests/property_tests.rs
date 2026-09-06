@@ -17,6 +17,13 @@ fn run_random_legal_policy(num_players: usize, seed: u64, choice_indices: &[u32]
         let player = game.active_players()[0];
         let actions = game.legal_actions(player);
         assert!(!actions.is_empty(), "action_mask must never be empty for the acting agent (phase={})", game.current_phase());
+        assert!(
+            actions.len() <= game.max_legal_actions(),
+            "legal action count {} exceeded the declared bound {} (phase={})",
+            actions.len(),
+            game.max_legal_actions(),
+            game.current_phase()
+        );
         let idx = choice_indices[step % choice_indices.len()] as usize % actions.len();
         game.apply_action(player, actions[idx].clone()).unwrap();
 
@@ -39,4 +46,19 @@ proptest! {
     ) {
         run_random_legal_policy(num_players, seed, &choice_indices, 300);
     }
+}
+
+/// The confirmed 120-card deck's bound is what the Python action space is
+/// sized from, so pin it: a change here means every trained checkpoint's
+/// policy head no longer matches the environment.
+#[test]
+fn confirmed_deck_action_bounds_are_stable() {
+    use sasquatch_engine::deck::DeckConfig;
+    use sasquatch_engine::game::GameState;
+
+    let toml = include_str!("../../configs/deck.toml");
+    let bounds: Vec<usize> = (2..=6)
+        .map(|n| GameState::new(n, DeckConfig::from_toml_str(toml).unwrap(), 0).unwrap().max_legal_actions())
+        .collect();
+    assert_eq!(bounds, vec![116, 117, 171, 234, 306]);
 }
