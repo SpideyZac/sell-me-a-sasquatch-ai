@@ -1,10 +1,11 @@
-"""Plain-text renderer for debugging (§3.1). Not used for training - the
-engine has no concept of a human-facing UI - just for eyeballing a rollout."""
+"""Plain-text renderer for debugging. Not used for training, since the
+engine has no concept of a human-facing UI; just for eyeballing a rollout."""
 
 from __future__ import annotations
 
 
 def _card_label(game, card_id: int) -> str:
+    """A short human-readable label for one card."""
     kind = game.card_kind(card_id)
     name = game.card_name(card_id)
     return f"{name}[{kind}]#{card_id}"
@@ -12,7 +13,7 @@ def _card_label(game, card_id: int) -> str:
 
 def render_state(game, observer: int | None = None) -> str:
     """Renders the full engine state (or, if `observer` is given, that
-    player's filtered `Observation`) as a human-readable multi-line string."""
+    player's filtered observation) as a human-readable multi-line string."""
     lines = []
     lines.append(f"phase={game.current_phase()} turn_leader={game.turn_leader()} active={game.active_players()}")
     if game.is_game_over():

@@ -1,10 +1,12 @@
 mod common;
 
 use common::*;
-use sasquatch_engine::action::Action;
-use sasquatch_engine::card::{CardKind, Tier};
-use sasquatch_engine::deck::DeckConfig;
-use sasquatch_engine::game::{Event, GameState};
+use sasquatch_engine::{
+    action::Action,
+    card::{CardKind, Tier},
+    deck::DeckConfig,
+    game::{Event, GameState},
+};
 
 /// A single-tier deck (plenty of copies, no Nasties/Thingamabobs) so every
 /// deal offered is built from that tier alone - used to drive tier-specific
@@ -27,8 +29,8 @@ fn single_tier_deck(tier: Tier, set_size: u32) -> DeckConfig {
     DeckConfig::from_toml_str(&toml).unwrap()
 }
 
-/// §2.3 step 6.2 + §2.4 table: for every tier, completing a set discards the
-/// cards and gains exactly 1 Point Token, regardless of tier.
+/// For every tier, completing a set discards the cards and gains exactly
+/// one point token, regardless of tier.
 #[test]
 fn every_creature_tier_completes_a_set_for_exactly_one_point_token() {
     for tier in Tier::ALL {
@@ -56,23 +58,38 @@ fn every_creature_tier_completes_a_set_for_exactly_one_point_token() {
                 game.apply_action(buyer, peek).unwrap();
             }
             auto_pass_thingamabob_window(&mut game);
-            let Action::ChooseDeal { seller: chosen } = game.legal_actions(buyer)[0].clone() else { panic!() };
-            let events = game.apply_action(buyer, Action::ChooseDeal { seller: chosen }).unwrap();
+            let Action::ChooseDeal { seller: chosen } = game.legal_actions(buyer)[0].clone() else {
+                panic!()
+            };
+            let events = game
+                .apply_action(buyer, Action::ChooseDeal { seller: chosen })
+                .unwrap();
 
             for e in &events {
-                if let Event::CreatureSetTradedIn { tier: t, tokens_gained, .. } = e {
+                if let Event::CreatureSetTradedIn {
+                    tier: t,
+                    tokens_gained,
+                    ..
+                } = e
+                {
                     assert_eq!(*t, tier);
-                    assert_eq!(*tokens_gained, 1, "{tier} set completion must award exactly 1 token");
+                    assert_eq!(
+                        *tokens_gained, 1,
+                        "{tier} set completion must award exactly 1 token"
+                    );
                     found = true;
                 }
             }
         }
-        assert!(found, "no completion event observed for {tier} within 10 turns");
+        assert!(
+            found,
+            "no completion event observed for {tier} within 10 turns"
+        );
     }
 }
 
-/// §2.3 step 6: Nasties must be fully traded in before Creatures - assert
-/// event ordering when both complete in the same trade-in phase.
+/// Nasties must be fully traded in before creatures; assert event ordering
+/// when both complete in the same trade-in phase.
 #[test]
 fn nasties_are_traded_in_before_creatures_in_event_order() {
     use sasquatch_engine::card::NastyKind;
@@ -84,16 +101,30 @@ fn nasties_are_traded_in_before_creatures_in_event_order() {
             let player = game.active_players()[0];
             if game.current_phase() == "deal_offer_submit" {
                 let hand = game.player_hand(player).to_vec();
-                let ppb: Vec<_> = hand.iter().copied().filter(|&c| game.card_kind(c) == Some(CardKind::Nasty(NastyKind::TrojanHorse))).collect();
-                let giant: Vec<_> = hand.iter().copied().filter(|&c| game.card_kind(c) == Some(CardKind::Creature(Tier::Giant))).collect();
-                let action = if player != buyer && ppb.len() >= 3 && !giant.is_empty() && target_seller.is_none() {
+                let ppb: Vec<_> = hand
+                    .iter()
+                    .copied()
+                    .filter(|&c| game.card_kind(c) == Some(CardKind::Nasty(NastyKind::TrojanHorse)))
+                    .collect();
+                let giant: Vec<_> = hand
+                    .iter()
+                    .copied()
+                    .filter(|&c| game.card_kind(c) == Some(CardKind::Creature(Tier::Giant)))
+                    .collect();
+                let action = if player != buyer
+                    && ppb.len() >= 3
+                    && !giant.is_empty()
+                    && target_seller.is_none()
+                {
                     // Can't fit both a full Trojan Horse set (3) and a Giant
                     // in one 3-card deal; instead rely on natural collection
                     // accumulation being unlikely in one turn - so just
                     // submit the Trojan Horse set; the ordering assertion
                     // below is about *whichever* completions occur, if any.
                     target_seller = Some(player);
-                    Action::SubmitDeal { cards: [ppb[0], ppb[1], ppb[2]] }
+                    Action::SubmitDeal {
+                        cards: [ppb[0], ppb[1], ppb[2]],
+                    }
                 } else {
                     game.legal_actions(player).into_iter().next().unwrap()
                 };
@@ -103,20 +134,40 @@ fn nasties_are_traded_in_before_creatures_in_event_order() {
                 game.apply_action(player, action).unwrap();
             }
         }
-        let Some(_seller) = target_seller else { continue };
+        let Some(_seller) = target_seller else {
+            continue;
+        };
         if game.current_phase() == "buyer_peek" {
             let peek = game.legal_actions(buyer)[0].clone();
             game.apply_action(buyer, peek).unwrap();
         }
         auto_pass_thingamabob_window(&mut game);
         let options = game.legal_actions(buyer);
-        let seller_to_choose = if let Action::ChooseDeal { seller } = options[0] { seller } else { panic!() };
-        let events = game.apply_action(buyer, Action::ChooseDeal { seller: seller_to_choose }).unwrap();
+        let seller_to_choose = if let Action::ChooseDeal { seller } = options[0] {
+            seller
+        } else {
+            panic!()
+        };
+        let events = game
+            .apply_action(
+                buyer,
+                Action::ChooseDeal {
+                    seller: seller_to_choose,
+                },
+            )
+            .unwrap();
 
-        let last_nasty_idx = events.iter().rposition(|e| matches!(e, Event::NastySetTradedIn { .. }));
-        let first_creature_idx = events.iter().position(|e| matches!(e, Event::CreatureSetTradedIn { .. }));
+        let last_nasty_idx = events
+            .iter()
+            .rposition(|e| matches!(e, Event::NastySetTradedIn { .. }));
+        let first_creature_idx = events
+            .iter()
+            .position(|e| matches!(e, Event::CreatureSetTradedIn { .. }));
         if let (Some(n), Some(c)) = (last_nasty_idx, first_creature_idx) {
-            assert!(n < c, "every Nasty trade-in event must precede every Creature trade-in event");
+            assert!(
+                n < c,
+                "every Nasty trade-in event must precede every Creature trade-in event"
+            );
             return;
         }
     }

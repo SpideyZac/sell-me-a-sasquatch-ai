@@ -1,44 +1,99 @@
-//! Action space (§4). All actions carry only ids/indices, never full card
-//! data, to keep the RL action space and the FFI boundary compact.
+//! The action space. Actions only carry ids and indices, never full card
+//! data, so they stay compact for both the RL action space and the FFI
+//! boundary.
 
 use crate::card::{CardId, PlayerId};
 
+/// Parameters for a thingamabob play, one variant per card that needs extra
+/// targeting info beyond the card id itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThingamabobParams {
-    /// Platonic Isolator: target must currently have strictly more Point
-    /// Tokens than the acting player (enforced in `legal_actions`).
-    PlatonicIsolator { target_player: PlayerId },
-    /// Detrital Repositioner / Super Detrital Repositioner share this: the
-    /// max cards/deals allowed is a property of the specific card played
-    /// (looked up via `Catalog::thingamabob_effect`), not of this variant.
-    RemoveFromDeals { removals: Vec<(PlayerId, CardId)> },
-    CryptozooticExpander { hand_card: CardId, target_deal: PlayerId },
-    SpectroelectricOptimeter { target_deal: PlayerId, target_card: CardId },
+    /// Platonic Isolator: the target must currently hold strictly more
+    /// point tokens than the acting player, enforced in [`crate::game`]'s
+    /// legal action generation.
+    PlatonicIsolator {
+        /// Player being targeted.
+        target_player: PlayerId,
+    },
+    /// Shared by Detrital Repositioner and Super Detrital Repositioner. The
+    /// max number of removals allowed comes from the catalog entry for the
+    /// specific card played, not from this variant.
+    RemoveFromDeals {
+        /// Deal-card pairs to remove, one per removal.
+        removals: Vec<(PlayerId, CardId)>,
+    },
+    /// Cryptozootic Expander.
+    CryptozooticExpander {
+        /// Card taken from the player's hand.
+        hand_card: CardId,
+        /// Deal the hand card is added to.
+        target_deal: PlayerId,
+    },
+    /// Spectroelectric Optimeter.
+    SpectroelectricOptimeter {
+        /// Deal being swapped from.
+        target_deal: PlayerId,
+        /// Card being swapped in.
+        target_card: CardId,
+    },
 }
 
+/// A single move a player can make. Every action variant is a full legal
+/// move, not a partial input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Buyer-mode only: a seller's deal-offer micro-turn.
-    SubmitDeal { cards: [CardId; 3] },
-    /// 2-player mode only (§2.7): the active player's whole deal-offer
-    /// micro-turn - splits exactly 3 cards from their own hand between
-    /// `own_pile` (theirs again on Accept) and `other_pile` (the opponent's
-    /// on Accept); sizes can be any split summing to 3 (3/0, 2/1, 1/2, 0/3).
-    TwoPlayerSubmitDeal { own_pile: Vec<CardId>, other_pile: Vec<CardId> },
-    /// Choosing which of the 3 just-submitted cards to flip face up.
-    RevealCard { card: CardId },
-    /// Buyer-mode only: the Buyer's extra peek target (§2.3 step 3). Which
-    /// of the target's still-hidden cards flips is resolved by the engine's
-    /// RNG - see README's flagged rules assumption.
-    BuyerPeek { target_seller: PlayerId },
-    PlayThingamabob { card: CardId, params: ThingamabobParams },
+    SubmitDeal {
+        /// The three cards offered.
+        cards: [CardId; 3],
+    },
+    /// Two-player mode only: the active player's whole deal-offer
+    /// micro-turn. Splits exactly three cards from their own hand between
+    /// `own_pile` (theirs again on accept) and `other_pile` (the opponent's
+    /// on accept). The split can be any combination summing to three.
+    TwoPlayerSubmitDeal {
+        /// Cards that stay with the active player if accepted.
+        own_pile: Vec<CardId>,
+        /// Cards that go to the opponent if accepted.
+        other_pile: Vec<CardId>,
+    },
+    /// Choosing which of the three just-submitted cards to flip face up.
+    RevealCard {
+        /// Card being revealed.
+        card: CardId,
+    },
+    /// Buyer-mode only: the buyer's extra peek target. Which of the
+    /// target's still-hidden cards flips is resolved by the engine's RNG,
+    /// see the README's flagged rules assumption.
+    BuyerPeek {
+        /// Seller being peeked at.
+        target_seller: PlayerId,
+    },
+    /// Playing a thingamabob card.
+    PlayThingamabob {
+        /// Card being played.
+        card: CardId,
+        /// Targeting info specific to the card played.
+        params: ThingamabobParams,
+    },
+    /// Declining to play a thingamabob during the response window.
     PassThingamabobWindow,
-    /// Buyer-mode only: the Buyer's final commit (§2.3 step 5).
-    ChooseDeal { seller: PlayerId },
-    /// 2-player mode only (§2.7): the responder's Accept/Reverse decision.
-    RespondToDeal { reverse: bool },
-    /// New-Buyer's (2-player mode: responder's) choice of which card(s) to
-    /// take for Poison Pill Bug / Loan Shark (§2.4). `taken_cards` must be a
-    /// subset (size 0..=effect max) of the target player's Collection.
-    ResolveNastyPenalty { taken_cards: Vec<CardId> },
+    /// Buyer-mode only: the buyer's final commit.
+    ChooseDeal {
+        /// Seller whose deal is chosen.
+        seller: PlayerId,
+    },
+    /// Two-player mode only: the responder's accept or reverse decision.
+    RespondToDeal {
+        /// True to reverse the deal instead of accepting it.
+        reverse: bool,
+    },
+    /// The new buyer's (two-player mode: responder's) choice of which
+    /// card(s) to take for Poison Pill Bug or Loan Shark. `taken_cards`
+    /// must be a subset of the target player's collection, sized within
+    /// the effect's allowed max.
+    ResolveNastyPenalty {
+        /// Cards taken from the target's collection.
+        taken_cards: Vec<CardId>,
+    },
 }

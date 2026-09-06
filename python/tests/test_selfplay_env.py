@@ -37,8 +37,8 @@ def test_random_vs_random_episode_runs_to_completion(players):
     assert terminated
     assert 0 <= info["winner"] < players
     assert info["num_players"] == players
-    # The total carries the terminal +-1 (§3.4) plus accumulated
-    # potential-based shaping, so it will not be exactly +-1 - just finite.
+    # the total carries the terminal +-1 plus accumulated potential-based
+    # shaping, so it will not be exactly +-1, just finite
     assert np.isfinite(reward)
 
 

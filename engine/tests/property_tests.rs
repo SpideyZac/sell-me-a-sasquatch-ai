@@ -1,12 +1,17 @@
-//! §5 property-based tests: random legal-action sequences never panic, total
-//! card count is conserved, and Point Token totals never underflow.
+//! Property-based tests: random legal-action sequences never panic, total
+//! card count is conserved, and point token totals never underflow.
 
 mod common;
 
 use common::new_test_game;
 use proptest::prelude::*;
 
-fn run_random_legal_policy(num_players: usize, seed: u64, choice_indices: &[u32], max_steps: usize) -> sasquatch_engine::game::GameState {
+fn run_random_legal_policy(
+    num_players: usize,
+    seed: u64,
+    choice_indices: &[u32],
+    max_steps: usize,
+) -> sasquatch_engine::game::GameState {
     let mut game = new_test_game(num_players, seed);
     let total_before = game.total_card_count();
 
@@ -16,7 +21,11 @@ fn run_random_legal_policy(num_players: usize, seed: u64, choice_indices: &[u32]
         }
         let player = game.active_players()[0];
         let actions = game.legal_actions(player);
-        assert!(!actions.is_empty(), "action_mask must never be empty for the acting agent (phase={})", game.current_phase());
+        assert!(
+            !actions.is_empty(),
+            "action_mask must never be empty for the acting agent (phase={})",
+            game.current_phase()
+        );
         assert!(
             actions.len() <= game.max_legal_actions(),
             "legal action count {} exceeded the declared bound {} (phase={})",
@@ -27,9 +36,16 @@ fn run_random_legal_policy(num_players: usize, seed: u64, choice_indices: &[u32]
         let idx = choice_indices[step % choice_indices.len()] as usize % actions.len();
         game.apply_action(player, actions[idx].clone()).unwrap();
 
-        assert_eq!(game.total_card_count(), total_before, "card count must be conserved at every step");
+        assert_eq!(
+            game.total_card_count(),
+            total_before,
+            "card count must be conserved at every step"
+        );
         for p in 0..num_players {
-            assert!(game.player_point_tokens(p) < 1_000_000, "sanity bound, would also catch a wraparound underflow");
+            assert!(
+                game.player_point_tokens(p) < 1_000_000,
+                "sanity bound, would also catch a wraparound underflow"
+            );
         }
     }
     game
@@ -53,12 +69,15 @@ proptest! {
 /// policy head no longer matches the environment.
 #[test]
 fn confirmed_deck_action_bounds_are_stable() {
-    use sasquatch_engine::deck::DeckConfig;
-    use sasquatch_engine::game::GameState;
+    use sasquatch_engine::{deck::DeckConfig, game::GameState};
 
     let toml = include_str!("../../configs/deck.toml");
     let bounds: Vec<usize> = (2..=6)
-        .map(|n| GameState::new(n, DeckConfig::from_toml_str(toml).unwrap(), 0).unwrap().max_legal_actions())
+        .map(|n| {
+            GameState::new(n, DeckConfig::from_toml_str(toml).unwrap(), 0)
+                .unwrap()
+                .max_legal_actions()
+        })
         .collect();
     assert_eq!(bounds, vec![116, 117, 171, 234, 306]);
 }

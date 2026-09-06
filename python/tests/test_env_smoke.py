@@ -1,4 +1,4 @@
-"""§5 Python-side smoke test: random-policy episodes through the PettingZoo
+"""Python-side smoke test: random-policy episodes through the PettingZoo
 env, asserting no exceptions, space conformance (via PettingZoo's own
 `api_test`), and that the action mask is never empty for a live agent."""
 

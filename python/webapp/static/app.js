@@ -67,7 +67,7 @@ function collectSeatModels(container, numPlayers, humanSeat) {
   return seatModels;
 }
 
-// ============================== WATCH ========================================
+// watch
 
 let watchGameId = null;
 let watchAutoplayTimer = null;
@@ -174,7 +174,7 @@ function renderWatchState(state) {
   document.getElementById("watch-log").innerHTML = "<h3>Log</h3>" + state.log.map((l) => `<div>${l}</div>`).join("");
 }
 
-// ============================== PLAY =========================================
+// play
 
 let playGameId = null;
 
@@ -273,7 +273,7 @@ function renderPlayState(state) {
   document.getElementById("play-log").innerHTML = "<h3>Log</h3>" + state.log.map((l) => `<div>${l}</div>`).join("");
 }
 
-// ============================== ADVISOR (Live Game tracker) =================
+// advisor (live game tracker)
 // For an actual live physical game: no simulated deck, no AI seats. It's
 // the real rules engine underneath (via /api/live), so collections, point
 // totals, discard/draw piles, and set trade-ins are all handled for you -

@@ -1,7 +1,8 @@
-"""Smoke tests for the local web app (Watch / Play / Live), using Flask's
-test client (no real server/port needed). Only exercises the "random"
-policy path - model-backed paths need the optional `[train]` extra plus an
-actual trained `.zip` on disk, neither of which a fresh checkout has.
+"""Smoke tests for the local web app (watch, play, and live modes), using
+Flask's test client (no real server or port needed). Only exercises the
+"random" policy path; model-backed paths need the optional `[train]`
+extra plus an actual trained `.zip` on disk, neither of which a fresh
+checkout has.
 """
 
 import importlib.util
@@ -30,19 +31,20 @@ ALL_CLASSES = [
 
 
 def _load_app_module():
+    """Loads `webapp/app.py` as a module, since it isn't part of an installed package."""
     webapp_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "webapp"))
     path = os.path.join(webapp_dir, "app.py")
-    # app.py does bare `import card_display` / `live_game` / `models` (its
-    # sibling modules) - fine when run normally (`python webapp/app.py`
+    # app.py does bare "import card_display" / "live_game" / "models" (its
+    # sibling modules), fine when run normally ("python webapp/app.py"
     # puts its own directory on sys.path[0] automatically), but
-    # spec_from_file_location doesn't, so those imports need a hand here.
+    # spec_from_file_location doesn't, so those imports need a hand here
     if webapp_dir not in sys.path:
         sys.path.insert(0, webapp_dir)
     spec = importlib.util.spec_from_file_location("sasquatch_webapp_app", path)
     module = importlib.util.module_from_spec(spec)
-    # Flask's get_root_path() (used to locate templates/ and static/) looks
-    # the module up in sys.modules by name - module_from_spec alone doesn't
-    # register it there, only importlib's higher-level import machinery does.
+    # flask's get_root_path() (used to locate templates/ and static/) looks
+    # the module up in sys.modules by name; module_from_spec alone doesn't
+    # register it there, only importlib's higher-level import machinery does
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
@@ -110,7 +112,7 @@ def _pick_kind(supply: dict) -> str:
 
 
 def _play_live_game_randomly(client, live_id, max_steps=8000):
-    """Drives a full Live-tracker game by answering every prompt with a
+    """Drives a full live-tracker game by answering every prompt with a
     uniformly random (but supply-respecting) choice, asserting the flow
     never errors and eventually reaches game_over."""
     state = client.get(f"/api/live/{live_id}").get_json()["state"]
@@ -162,13 +164,13 @@ def test_live_game_starts_with_pin_hand_prompt(client):
 def test_live_game_pinned_hand_names_match_what_you_entered(client):
     """Regression test: `pin_kind` overwrites a card's kind, but each card
     also carries a separately-set flavor `name` from deck-shuffle time (see
-    `deck.rs`) - a Nasty/Thingamabob pinned to a *different* kind must not
+    `deck.rs`); a nasty or thingamabob pinned to a different kind must not
     keep displaying its old, now-wrong name (e.g. showing "Trojan Horse"
-    for a card you entered as some other Nasty/Thingamabob)."""
+    for a card you entered as some other nasty or thingamabob)."""
     resp = client.post("/api/live", json={"num_players": 4, "human_seat": 0, "seed": 9, "advisor_model": "random"})
     live_id = resp.get_json()["live_id"]
-    # A deliberately card-varied starting hand so a stale name would be
-    # observable regardless of what this seed's engine happened to deal.
+    # a deliberately card-varied starting hand so a stale name would be
+    # observable regardless of what this seed's engine happened to deal
     entered_kinds = ["Nasty:Trojan Horse", "Thingamabob:Platonic Isolator", "Creature:Medium", "Creature:Tiny", "Nasty:Loan Shark"]
     expected_names = ["Trojan Horse", "Platonic Isolator", "Medium Creature", "Tiny Creature", "Loan Shark"]
     resp = client.post(f"/api/live/{live_id}/respond", json={"kinds": entered_kinds})
@@ -184,9 +186,9 @@ def test_live_game_opponent_turns_hide_unrevealed_kinds(client):
     kinds = [c["kind"] for c in state["hand"]]
     resp = client.post(f"/api/live/{live_id}/respond", json={"kinds": kinds})
     state = resp.get_json()["state"]
-    # It's now an opponent's deal-offer submit turn (turn leader is you only
-    # if you happen to be it - either way the *other* seats' unknown combos
-    # must never leak a real card name before it's actually revealed).
+    # it's now an opponent's deal-offer submit turn (turn leader is you
+    # only if you happen to be it, either way the other seats' unknown
+    # combos must never leak a real card name before it's actually revealed)
     prompt = state["prompt"]
     if prompt["type"] == "choose_action" and not prompt["your_turn"]:
         assert all("???" in o["label"] or "player_" in o["label"] for o in prompt["options"])

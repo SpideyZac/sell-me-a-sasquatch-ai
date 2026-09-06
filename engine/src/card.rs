@@ -1,26 +1,36 @@
-//! Card identity and type catalog. See PROMPT.md §2.4/§2.5.
+//! Card identity and the type catalog.
 //!
-//! Individual named Creature cards carry no mechanical behavior (§2.4 note) -
-//! only `Tier` matters for legality/set-completion. Names are display-only
-//! flavor. Nasties and Thingamabobs *do* have per-kind identity because sets
-//! (Nasties) and effects (both) are defined per specific card, not per tier.
+//! Individual named creature cards carry no mechanical behavior, only
+//! [`Tier`] matters for legality and set completion; names are display-only
+//! flavor. Nasties and thingamabobs do have per-kind identity because sets
+//! (nasties) and effects (both) are defined per specific card, not per tier.
 
 use std::fmt;
 
+/// Unique id for a single physical card in the deck.
 pub type CardId = u32;
+/// Index of a player within the game's player list.
 pub type PlayerId = usize;
 
+/// Size class of a creature card, the only thing about a creature that
+/// affects legality or set completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Tier {
+    /// Largest creature tier.
     Giant,
+    /// Second largest creature tier.
     Big,
+    /// Second smallest creature tier.
     Medium,
+    /// Smallest creature tier.
     Tiny,
 }
 
 impl Tier {
+    /// Every tier, in display order.
     pub const ALL: [Tier; 4] = [Tier::Giant, Tier::Big, Tier::Medium, Tier::Tiny];
 
+    /// Parses a tier from its config name, returns `None` if unrecognized.
     pub fn parse(s: &str) -> Option<Tier> {
         match s {
             "Giant" => Some(Tier::Giant),
@@ -44,16 +54,26 @@ impl fmt::Display for Tier {
     }
 }
 
+/// Which nasty card a nasty is, since nasty behavior is defined per card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum NastyKind {
+    /// Poison Pill Bug.
     PoisonPillBug,
+    /// Loan Shark.
     LoanShark,
+    /// Trojan Horse.
     TrojanHorse,
 }
 
 impl NastyKind {
-    pub const ALL: [NastyKind; 3] = [NastyKind::PoisonPillBug, NastyKind::LoanShark, NastyKind::TrojanHorse];
+    /// Every nasty kind.
+    pub const ALL: [NastyKind; 3] = [
+        NastyKind::PoisonPillBug,
+        NastyKind::LoanShark,
+        NastyKind::TrojanHorse,
+    ];
 
+    /// Parses a nasty kind from its config name, returns `None` if unrecognized.
     pub fn parse(s: &str) -> Option<NastyKind> {
         match s {
             "Poison Pill Bug" => Some(NastyKind::PoisonPillBug),
@@ -63,6 +83,7 @@ impl NastyKind {
         }
     }
 
+    /// The card's display name.
     pub fn name(&self) -> &'static str {
         match self {
             NastyKind::PoisonPillBug => "Poison Pill Bug",
@@ -72,20 +93,20 @@ impl NastyKind {
     }
 }
 
-/// Behavior triggered when a Nasty set is traded in (§2.4). Parsed from the
-/// deck config's `effect` string so behavior stays data-driven.
+/// What happens when a full nasty set is traded in, parsed from the deck
+/// config's `effect` string so behavior stays data-driven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NastyEffect {
-    /// Buyer may steal up to N cards (0..=N, buyer's choice) from the
-    /// trading-in player's Collection. Fizzles/caps silently if fewer are
-    /// available (§2.4 global rule).
+    /// Buyer may steal up to N cards, their choice, from the trading-in
+    /// player's collection. Fizzles or caps silently if fewer are available.
     BuyerMayStealUpToNCards(u8),
-    /// Buyer automatically steals 1 Point Token (no choice). Fizzles
-    /// silently if the player has 0 tokens.
+    /// Buyer automatically steals one point token, no choice involved.
+    /// Fizzles silently if the player has none.
     BuyerStealsOnePointToken,
 }
 
 impl NastyEffect {
+    /// Parses a nasty effect from its config string, returns `None` if unrecognized.
     pub fn parse(s: &str) -> Option<NastyEffect> {
         match s {
             "buyer_may_steal_up_to_1_card" => Some(NastyEffect::BuyerMayStealUpToNCards(1)),
@@ -96,16 +117,23 @@ impl NastyEffect {
     }
 }
 
+/// Which thingamabob card a thingamabob is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ThingamabobKind {
+    /// Platonic Isolator.
     PlatonicIsolator,
+    /// Detrital Repositioner.
     DetritalRepositioner,
+    /// Super Detrital Repositioner.
     SuperDetritalRepositioner,
+    /// Cryptozootic Expander.
     CryptozooticExpander,
+    /// Spectroelectric Optimeter.
     SpectroelectricOptimeter,
 }
 
 impl ThingamabobKind {
+    /// Every thingamabob kind.
     pub const ALL: [ThingamabobKind; 5] = [
         ThingamabobKind::PlatonicIsolator,
         ThingamabobKind::DetritalRepositioner,
@@ -114,6 +142,7 @@ impl ThingamabobKind {
         ThingamabobKind::SpectroelectricOptimeter,
     ];
 
+    /// Parses a thingamabob kind from its config name, returns `None` if unrecognized.
     pub fn parse(s: &str) -> Option<ThingamabobKind> {
         match s {
             "Platonic Isolator" => Some(ThingamabobKind::PlatonicIsolator),
@@ -125,6 +154,7 @@ impl ThingamabobKind {
         }
     }
 
+    /// The card's display name.
     pub fn name(&self) -> &'static str {
         match self {
             ThingamabobKind::PlatonicIsolator => "Platonic Isolator",
@@ -136,25 +166,43 @@ impl ThingamabobKind {
     }
 }
 
-/// Behavior triggered when a Thingamabob is played (§2.3 step 4 / §2.4
-/// table). Parsed from the deck config's `effect` string. Note that the two
-/// "remove cards from deals" cards share one parameterized effect variant -
-/// they are still distinct cards/counts in the catalog, just unified logic.
+/// What happens when a thingamabob is played, parsed from the deck config's
+/// `effect` string. The two "remove cards from deals" cards share one
+/// parameterized variant here even though they're distinct cards in the
+/// catalog, since the logic is the same.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThingamabobEffect {
+    /// Steal a point token from a richer player.
     StealPointTokenFromRicherPlayer,
-    RemoveCardsFromDeals { max_cards: u8, max_deals: u8 },
+    /// Remove cards from active deals.
+    RemoveCardsFromDeals {
+        /// Max number of cards that can be removed total.
+        max_cards: u8,
+        /// Max number of distinct deals that can be touched.
+        max_deals: u8,
+    },
+    /// Add a hidden card from hand into a deal.
     AddHiddenHandCardToDeal,
+    /// Reveal a hidden card in a deal.
     RevealCardInDeal,
 }
 
 impl ThingamabobEffect {
+    /// Parses a thingamabob effect from its config string, returns `None` if unrecognized.
     pub fn parse(s: &str) -> Option<ThingamabobEffect> {
         match s {
-            "steal_point_token_from_richer_player" => Some(ThingamabobEffect::StealPointTokenFromRicherPlayer),
-            "remove_1_card_from_1_deal" => Some(ThingamabobEffect::RemoveCardsFromDeals { max_cards: 1, max_deals: 1 }),
+            "steal_point_token_from_richer_player" => {
+                Some(ThingamabobEffect::StealPointTokenFromRicherPlayer)
+            }
+            "remove_1_card_from_1_deal" => Some(ThingamabobEffect::RemoveCardsFromDeals {
+                max_cards: 1,
+                max_deals: 1,
+            }),
             "remove_up_to_2_cards_from_1_or_2_deals" => {
-                Some(ThingamabobEffect::RemoveCardsFromDeals { max_cards: 2, max_deals: 2 })
+                Some(ThingamabobEffect::RemoveCardsFromDeals {
+                    max_cards: 2,
+                    max_deals: 2,
+                })
             }
             "add_hidden_hand_card_to_deal" => Some(ThingamabobEffect::AddHiddenHandCardToDeal),
             "reveal_1_card_in_a_deal" => Some(ThingamabobEffect::RevealCardInDeal),
@@ -163,32 +211,39 @@ impl ThingamabobEffect {
     }
 }
 
+/// The mechanical type of a card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CardKind {
+    /// A creature of the given tier.
     Creature(Tier),
+    /// A nasty of the given kind.
     Nasty(NastyKind),
+    /// A thingamabob of the given kind.
     Thingamabob(ThingamabobKind),
 }
 
+/// A single physical card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card {
+    /// This card's unique id.
     pub id: CardId,
+    /// This card's mechanical type.
     pub kind: CardKind,
-    /// Display-only flavor name. Never affects legality or set-completion
-    /// logic (§2.4 note on Creatures) - for Nasties/Thingamabobs this is
-    /// just the canonical card name.
+    /// Display-only flavor name, never affects legality or set completion.
+    /// For nasties and thingamabobs this is just the card's canonical name.
     pub name: String,
 }
 
-/// Number of distinct *card classes* - the coarse bucket a policy actually
-/// reasons about (tier for Creatures, kind for Nasties/Thingamabobs).
-/// Individual card ids are meaningless to a learner (they're an arbitrary
-/// per-episode shuffle artifact), so every observation feature is expressed
-/// as counts over these classes.
+/// Number of distinct card classes, the coarse bucket a policy actually
+/// reasons about (tier for creatures, kind for nasties and thingamabobs).
+/// Individual card ids are meaningless to a learner since they're an
+/// arbitrary per-episode shuffle artifact, so every observation feature is
+/// expressed as counts over these classes.
 pub const NUM_CARD_CLASSES: usize = 12;
 
-/// Stable class ordering. Index here == index everywhere else (observation
-/// encoder, Python `spaces.CARD_CLASS_NAMES`, deck-composition vectors).
+/// Stable class ordering, index here matches index everywhere else
+/// (observation encoder, Python's `spaces.CARD_CLASS_NAMES`, deck-composition
+/// vectors).
 pub const CARD_CLASS_NAMES: [&str; NUM_CARD_CLASSES] = [
     "Creature:Giant",
     "Creature:Big",
@@ -205,7 +260,7 @@ pub const CARD_CLASS_NAMES: [&str; NUM_CARD_CLASSES] = [
 ];
 
 impl CardKind {
-    /// This kind's index into a `NUM_CARD_CLASSES`-wide count vector.
+    /// This kind's index into a [`NUM_CARD_CLASSES`]-wide count vector.
     pub const fn class_index(self) -> usize {
         match self {
             CardKind::Creature(Tier::Giant) => 0,
@@ -223,6 +278,7 @@ impl CardKind {
         }
     }
 
+    /// This kind's class name, e.g. `"Creature:Tiny"`.
     pub fn name(self) -> String {
         match self {
             CardKind::Creature(tier) => format!("Creature:{tier}"),
@@ -231,7 +287,7 @@ impl CardKind {
         }
     }
 
-    /// Inverse of `name` - parses e.g. `"Creature:Tiny"` back into a kind.
+    /// Inverse of [`Self::name`]; parses e.g. `"Creature:Tiny"` back into a kind.
     pub fn parse(s: &str) -> Option<CardKind> {
         let (prefix, rest) = s.split_once(':')?;
         match prefix {
@@ -254,7 +310,11 @@ mod class_tests {
             .iter()
             .map(|&t| CardKind::Creature(t))
             .chain(NastyKind::ALL.iter().map(|&k| CardKind::Nasty(k)))
-            .chain(ThingamabobKind::ALL.iter().map(|&k| CardKind::Thingamabob(k)))
+            .chain(
+                ThingamabobKind::ALL
+                    .iter()
+                    .map(|&k| CardKind::Thingamabob(k)),
+            )
             .collect();
         assert_eq!(all.len(), NUM_CARD_CLASSES);
         for kind in all {

@@ -1,6 +1,6 @@
-//! §3.2: same seed + same action sequence ⇒ identical observable outcomes
-//! (including RNG-driven resolutions like the Buyer's forced random peek
-//! and draw-pile reshuffles).
+//! The same seed plus the same action sequence produces identical
+//! observable outcomes, including RNG-driven resolutions like the buyer's
+//! forced random peek and draw-pile reshuffles.
 
 mod common;
 
@@ -16,7 +16,11 @@ fn run_first_legal_action_policy(game: &mut GameState, max_steps: usize) -> Vec<
             break;
         }
         let player = game.active_players()[0];
-        let action = game.legal_actions(player).into_iter().next().expect("action_mask must never be empty for the acting agent");
+        let action = game
+            .legal_actions(player)
+            .into_iter()
+            .next()
+            .expect("action_mask must never be empty for the acting agent");
         all_events.extend(game.apply_action(player, action).unwrap());
     }
     all_events
@@ -33,7 +37,11 @@ fn same_seed_and_actions_produce_identical_event_sequences_and_observations() {
 
         assert_eq!(events_a, events_b, "seed {seed}: event sequences diverged");
         for p in 0..num_players {
-            assert_eq!(game_a.observation_for(p), game_b.observation_for(p), "seed {seed} player {p}: observations diverged");
+            assert_eq!(
+                game_a.observation_for(p),
+                game_b.observation_for(p),
+                "seed {seed} player {p}: observations diverged"
+            );
         }
         assert_eq!(game_a.winner(), game_b.winner());
         assert_eq!(game_a.turn_leader(), game_b.turn_leader());

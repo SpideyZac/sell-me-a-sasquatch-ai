@@ -1,4 +1,4 @@
-"""Measure environment throughput - the number that bounds training speed.
+"""Measure environment throughput, the number that bounds training speed.
 
 Reports learner steps and full episodes per second per table size, with a
 random-policy opponent, and (with `--engine`) the raw Rust-side rate for
@@ -29,6 +29,7 @@ from sell_me_a_sasquatch.selfplay_env import SasquatchSelfPlayEnv, random_masked
 
 
 def bench_env(players, seconds: float, deck) -> tuple[float, float]:
+    """Steps and episodes per second for the self-play env against a random opponent."""
     env = SasquatchSelfPlayEnv(players=players, deck_config_path=deck, opponent_policy=random_masked_policy)
     env.reset(seed=0)
     rng = np.random.default_rng(0)
@@ -66,11 +67,13 @@ def bench_engine(num_players: int, seconds: float, deck) -> float:
 
 
 def _worker(args):
+    """Multiprocessing entry point: unpacks args and runs `bench_env` in this process."""
     players, seconds, deck_path = args
     return bench_env(players, seconds, load_deck(deck_path))
 
 
 def main(argv=None):
+    """Parses arguments and prints throughput for every configured table size."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seconds", type=float, default=3.0, help="Measurement window per configuration")
     parser.add_argument("--deck", type=str, default=DEFAULT_DECK_PATH)

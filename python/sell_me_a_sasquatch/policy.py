@@ -1,16 +1,16 @@
 """A pointer-style maskable policy, and a fast numpy copy of it.
 
-**Why not a plain MLP head.** The action space is ordinal: index `i` means
+Why not a plain MLP head: the action space is ordinal, index `i` means
 "the i-th entry of `legal_actions()` right now" (see `spaces.py`). A normal
 policy head maps a state latent to a fixed logit per index, which silently
-assumes index `i` means the same thing in every state - and here it does
+assumes index `i` means the same thing in every state, and here it does
 not. Index 7 might be "reveal the Giant" one micro-step and "steal two
 cards from the seat on my left" the next. A head like that has to reverse
 engineer the engine's enumeration order from the state before it can mean
 anything, which is close to hopeless.
 
-So instead the environment hands the policy a *description* of every
-candidate action (`obs["actions"]`, one feature row each - action type,
+So instead the environment hands the policy a description of every
+candidate action (`obs["actions"]`, one feature row each: action type,
 which card classes it commits, which seat it targets, how many face-down
 cards it touches), and the policy scores each candidate from its own
 description:
@@ -18,8 +18,8 @@ description:
     logit(i) = <encode(action_i), query(state)> / sqrt(d)  +  bias(action_i)
 
 This is the standard pointer/attention formulation. The score of an action
-now depends on what the action *does*, so it transfers across states, across
-table sizes, and across the shuffling of the action list - and adding a new
+now depends on what the action does, so it transfers across states, across
+table sizes, and across the shuffling of the action list, and adding a new
 action type does not invalidate what the policy already knows.
 
 `NumpyPointerPolicy` is the same computation in numpy, for the self-play
@@ -54,9 +54,11 @@ class StateExtractor(BaseFeaturesExtractor):
     """
 
     def __init__(self, observation_space: spaces.Dict):
+        """Builds an extractor sized to the `state` field's width."""
         super().__init__(observation_space, features_dim=int(observation_space["state"].shape[0]))
 
     def forward(self, observations: dict[str, th.Tensor]) -> th.Tensor:
+        """Passes `obs["state"]` through unchanged."""
         return observations["state"]
 
 
@@ -78,17 +80,19 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
         action_embed_dim: int = 64,
         **kwargs,
     ):
+        """Builds the policy, deferring the actual head to `_build`."""
         if not isinstance(observation_space, spaces.Dict) or "actions" not in observation_space.spaces:
             raise ValueError("MaskablePointerPolicy needs a Dict observation space with 'state' and 'actions'")
         self.action_feat_dim = int(observation_space["actions"].shape[1])
         self.action_embed_dim = action_embed_dim
         kwargs.setdefault("features_extractor_class", StateExtractor)
-        # The head reads `obs["actions"]` directly, so a second, unshared
-        # copy of the trunk would have nothing extra to extract.
+        # the head reads obs["actions"] directly, so a second, unshared
+        # copy of the trunk would have nothing extra to extract
         kwargs["share_features_extractor"] = True
         super().__init__(observation_space, action_space, lr_schedule, *args, **kwargs)
 
     def _build(self, lr_schedule: Schedule) -> None:
+        """Builds the trunk, the pointer head, and the optimizer."""
         self._build_mlp_extractor()
         dim = self.action_embed_dim
         self.action_encoder = nn.Sequential(
@@ -97,13 +101,13 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
             nn.Linear(dim, dim),
         )
         self.query_net = nn.Linear(self.mlp_extractor.latent_dim_pi, dim)
-        # A state-independent preference per action - lets the policy learn
-        # "passing is usually fine" without spending query capacity on it.
+        # a state-independent preference per action, lets the policy learn
+        # "passing is usually fine" without spending query capacity on it
         self.action_bias = nn.Linear(dim, 1)
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
-        # Unused: the base class documents `action_net` as the action head,
-        # and keeping the attribute (as a no-op) means anything reaching for
-        # it fails loudly rather than silently reading stale weights.
+        # unused: the base class documents action_net as the action head,
+        # and keeping the attribute (as a no-op) means anything reaching
+        # for it fails loudly rather than silently reading stale weights
         self.action_net = nn.Identity()
         self._logit_scale = float(dim) ** -0.5
 
@@ -122,6 +126,7 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
 
     def _get_constructor_parameters(self) -> dict[str, Any]:
+        """Adds `action_embed_dim` to the params SB3 needs to rebuild this policy."""
         data = super()._get_constructor_parameters()
         data.update(action_embed_dim=self.action_embed_dim)
         return data
@@ -132,10 +137,10 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
         """Scores every candidate action against the state.
 
         Given a mask, only the live candidates are embedded at all. The
-        action block is sized for the worst case (a 6-player Thingamabob
+        action block is sized for the worst case (a 6-player thingamabob
         window, hundreds of options) while a typical micro-turn offers a
         few dozen, so embedding the padded tail would be an order of
-        magnitude of wasted work on every forward *and* backward pass.
+        magnitude of wasted work on every forward and backward pass.
         Masked-out logits stay 0 here and are driven to -inf by
         `apply_masking` immediately afterwards."""
         query = self.query_net(latent_pi)  # (batch, dim)
@@ -151,6 +156,7 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
         return th.zeros(live.shape, dtype=scores.dtype, device=scores.device).masked_scatter(live, scores)
 
     def _distribution(self, latent_pi: th.Tensor, obs: PyTorchObs, action_masks: np.ndarray | None) -> MaskableDistribution:
+        """Builds the masked action distribution for one state."""
         logits = self._action_logits(latent_pi, obs["actions"], action_masks)
         distribution = self.action_dist.proba_distribution(action_logits=logits)
         if action_masks is not None:
@@ -160,6 +166,7 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
     # overrides that would otherwise go through `action_net`
 
     def forward(self, obs: PyTorchObs, deterministic: bool = False, action_masks: np.ndarray | None = None):
+        """Samples an action and returns it with its value estimate and log probability."""
         features = self.extract_features(obs)
         latent_pi, latent_vf = self.mlp_extractor(features)
         values = self.value_net(latent_vf)
@@ -169,17 +176,20 @@ class MaskablePointerPolicy(MaskableActorCriticPolicy):
         return actions.reshape((-1, *self.action_space.shape)), values, log_prob
 
     def evaluate_actions(self, obs: PyTorchObs, actions: th.Tensor, action_masks: np.ndarray | None = None):
+        """Scores given actions under the current policy, for the PPO loss."""
         features = self.extract_features(obs)
         latent_pi, latent_vf = self.mlp_extractor(features)
         distribution = self._distribution(latent_pi, obs, action_masks)
         return self.value_net(latent_vf), distribution.log_prob(actions), distribution.entropy()
 
     def get_distribution(self, obs: PyTorchObs, action_masks: np.ndarray | None = None) -> MaskableDistribution:
+        """The action distribution for one observation, without a value estimate."""
         features = super(MaskableActorCriticPolicy, self).extract_features(obs, self.pi_features_extractor)
         latent_pi = self.mlp_extractor.forward_actor(features)
         return self._distribution(latent_pi, obs, action_masks)
 
     def predict_values(self, obs: PyTorchObs) -> th.Tensor:
+        """The value estimate for one observation, without an action distribution."""
         features = super(MaskableActorCriticPolicy, self).extract_features(obs, self.vf_features_extractor)
         return self.value_net(self.mlp_extractor.forward_critic(features))
 
@@ -217,6 +227,7 @@ def _linear_stack(module: nn.Module) -> list[tuple[np.ndarray, np.ndarray, bool]
 
 
 def _apply(x: np.ndarray, layers: list[tuple[np.ndarray, np.ndarray, bool]]) -> np.ndarray:
+    """Runs `x` through a flattened linear/tanh stack from `_linear_stack`."""
     for weight, bias, tanh in layers:
         x = x @ weight + bias
         if tanh:
@@ -234,6 +245,7 @@ class NumpyPointerPolicy:
     """
 
     def __init__(self, trunk, query, encoder, bias, scale: float, rng: np.random.Generator | None = None):
+        """Wraps already-flattened weight stacks; use `from_model` in practice."""
         self.trunk = trunk
         self.query = query
         self.encoder = encoder
@@ -243,6 +255,7 @@ class NumpyPointerPolicy:
 
     @classmethod
     def from_model(cls, model, rng: np.random.Generator | None = None) -> "NumpyPointerPolicy":
+        """Builds a numpy copy from a trained SB3 model's weights."""
         policy = getattr(model, "policy", model)
         if not isinstance(policy, MaskablePointerPolicy):
             raise TypeError("NumpyPointerPolicy only mirrors MaskablePointerPolicy")
@@ -257,12 +270,14 @@ class NumpyPointerPolicy:
             )
 
     def logits(self, obs: dict) -> np.ndarray:
+        """Raw action logits for one observation, before masking."""
         latent = _apply(np.asarray(obs["state"], dtype=np.float32), self.trunk)
         query = _apply(latent, self.query)
         embedded = _apply(np.asarray(obs["actions"], dtype=np.float32), self.encoder)
         return embedded @ query * self.scale + _apply(embedded, self.bias)[..., 0]
 
     def __call__(self, obs: dict, mask: np.ndarray, deterministic: bool = False) -> int:
+        """Picks a legal action index, sampling unless `deterministic`."""
         logits = self.logits(obs)
         legal = np.asarray(mask, dtype=bool)
         if not legal.any():

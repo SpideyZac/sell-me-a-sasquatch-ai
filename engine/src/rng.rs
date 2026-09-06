@@ -1,21 +1,25 @@
 //! Seedable RNG wrapper. All randomness in the engine (shuffling, and the
-//! §2.3 step 3 forced-random hidden-card reveal) flows through this single
-//! type so `(seed, action_sequence)` fully determines an episode.
+//! forced-random hidden-card reveal) flows through this single type so
+//! `(seed, action_sequence)` fully determines an episode.
 
-use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
+use rand::{seq::SliceRandom, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
+/// A seeded, deterministic source of randomness for one game.
 #[derive(Clone)]
 pub struct GameRng {
     inner: ChaCha8Rng,
 }
 
 impl GameRng {
+    /// Builds an RNG from a seed.
     pub fn from_seed(seed: u64) -> Self {
-        Self { inner: ChaCha8Rng::seed_from_u64(seed) }
+        Self {
+            inner: ChaCha8Rng::seed_from_u64(seed),
+        }
     }
 
+    /// Shuffles a slice in place.
     pub fn shuffle<T>(&mut self, slice: &mut [T]) {
         slice.shuffle(&mut self.inner);
     }

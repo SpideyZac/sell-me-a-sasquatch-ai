@@ -1,16 +1,16 @@
-"""PettingZoo AECEnv wrapper (§3.4, Option A) around the Rust engine.
+"""PettingZoo AECEnv wrapper around the Rust engine.
 
-Each engine "turn" (§2.3) is decomposed into many micro-steps - one Seller's
-deal-offer submit, that Seller's reveal, the Buyer's peek, each Thingamabob
-window pass/play, the Buyer's final commit, each Nasty-penalty resolution -
-so that at any tick exactly one agent is `self.agent_selection`, matching
-`GameState::active_player()` from the Rust layer. Option B (a true
-`ParallelEnv` for the simultaneous deal-offer phase) is a documented
-alternative not implemented here - see PROMPT.md §3.4.
+Each engine "turn" is decomposed into many micro-steps: one seller's
+deal-offer submit, that seller's reveal, the buyer's peek, each thingamabob
+window pass or play, the buyer's final commit, each nasty-penalty
+resolution, so that at any tick exactly one agent is `self.agent_selection`,
+matching `GameState::active_player()` from the Rust layer. A true
+`ParallelEnv` for the simultaneous deal-offer phase would also be possible,
+but isn't implemented here.
 
-This is the *interface* env: PettingZoo-conformant, one agent at a time,
-suitable for external consumers, the web app and evaluation. Training does
-not go through it - `selfplay_env.py` drives the engine directly, since the
+This is the interface env: PettingZoo-conformant, one agent at a time,
+suitable for external consumers, the web app, and evaluation. Training does
+not go through it; `selfplay_env.py` drives the engine directly, since the
 AEC protocol's per-agent bookkeeping is pure overhead when one process owns
 the whole rollout anyway.
 """
@@ -29,15 +29,17 @@ from . import _native as native
 from . import spaces as sasquatch_spaces
 
 DEFAULT_DECK_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "configs", "deck.toml"))
+"""Path to the confirmed real deck config, used when no other deck is given."""
 
 _DECK_CACHE: dict[str, "native.Deck"] = {}
+"""Parsed decks keyed by normalized path, so repeated loads reuse one instance."""
 
 
 def load_deck(deck: "str | native.Deck" = DEFAULT_DECK_PATH) -> "native.Deck":
     """Parses `deck.toml` once per path and reuses it for every game.
 
     A fresh parse per `reset()` used to cost a file read plus a full TOML
-    parse - which, once the engine itself got fast, was a real share of an
+    parse, which, once the engine itself got fast, was a real share of an
     episode's total cost. Passing an already-loaded `Deck` through unchanged
     keeps callers that manage their own deck honest.
     """
@@ -51,20 +53,22 @@ def load_deck(deck: "str | native.Deck" = DEFAULT_DECK_PATH) -> "native.Deck":
     return cached
 
 
-# `(previous_tokens, current_tokens, player_id, winner) -> reward`
 RewardFn = Callable[[Sequence[int], Sequence[int], int, Optional[int]], float]
+"""`(previous_tokens, current_tokens, player_id, winner) -> reward`."""
 
 _SHAPING_COEF = 0.3
-_SHAPING_GAMMA = 0.99  # matches MaskablePPO's default discount factor
+"""Weight of the dense potential-based shaping term relative to the terminal reward."""
+_SHAPING_GAMMA = 0.99
+"""Discount factor used in the shaping term, matches MaskablePPO's default."""
 
 
 def lead_margin(tokens: Sequence[int], player_id: int) -> int:
-    """One player's Point Tokens minus the *best of everyone else's*.
+    """One player's point tokens minus the best of everyone else's.
 
-    This is the quantity that actually has to go positive to win (§2.6:
-    strictly more tokens than every other player at the threshold) - unlike
-    a raw token count, which rewards hoarding even while an opponent races
-    ahead faster.
+    This is the quantity that actually has to go positive to win (strictly
+    more tokens than every other player at the threshold), unlike a raw
+    token count, which rewards hoarding even while an opponent races ahead
+    faster.
 
     Deliberately a plain Python loop over a list rather than numpy: it runs
     several times per micro-step on a table of at most six seats, where
@@ -80,15 +84,15 @@ def lead_margin(tokens: Sequence[int], player_id: int) -> int:
 def default_reward_fn(
     prev_tokens: Sequence[int], tokens: Sequence[int], player_id: int, winner: Optional[int]
 ) -> float:
-    """+1 to the winner / -1 to everyone else at game end (§3.4's sparse
+    """+1 to the winner and -1 to everyone else at game end (the sparse
     ground-truth objective), plus a potential-based dense shaping term
-    tracking each step's change in *lead margin*.
+    tracking each step's change in lead margin.
 
-    Potential-based shaping (Ng, Harada & Russell 1999): adding
+    Potential-based shaping (Ng, Harada and Russell 1999): adding
     `gamma * phi(s') - phi(s)` for any potential function `phi` provably
     leaves the optimal policy unchanged, unlike an arbitrary dense bonus.
     That gives PPO a much denser signal across a long sparse-terminal
-    episode without distorting what "best play" means - a real risk with
+    episode without distorting what "best play" means, a real risk with
     naive shaping (e.g. rewarding raw token gains regardless of standing).
     """
     phi_before = lead_margin(prev_tokens, player_id)
@@ -101,12 +105,13 @@ def default_reward_fn(
 class SasquatchAECEnv(AECEnv):
     """`Sell Me a Sasquatch` as a PettingZoo `AECEnv`.
 
-    3-6 players use Buyer mode (§2.3); exactly 2 players automatically use
-    the materially different 2-player variant (§2.7) - decided by the Rust
+    Three to six players use buyer mode; exactly two players automatically
+    use the materially different two-player variant, decided by the Rust
     engine from `num_players`, not by this wrapper.
     """
 
     metadata = {"render_modes": ["human", "ansi"], "name": "sell_me_a_sasquatch_v0"}
+    """PettingZoo metadata: supported render modes and the env's registered name."""
 
     def __init__(
         self,
@@ -123,8 +128,8 @@ class SasquatchAECEnv(AECEnv):
         self.deck = load_deck(deck_config_path)
         self.render_mode = render_mode
         self.reward_fn = reward_fn or default_reward_fn
-        # Default to the width every table size needs, so a checkpoint
-        # trained on mixed table sizes drops straight into any of them.
+        # default to the width every table size needs, so a checkpoint
+        # trained on mixed table sizes drops straight into any of them
         self.max_actions = max_actions or sasquatch_spaces.max_legal_actions(self.deck)
 
         self.possible_agents = [f"player_{i}" for i in range(num_players)]
@@ -138,15 +143,18 @@ class SasquatchAECEnv(AECEnv):
 
     @functools.lru_cache(maxsize=None)
     def observation_space(self, agent):
+        """This agent's observation space, identical for every agent."""
         return sasquatch_spaces.observation_space(self.max_actions, with_action_mask=True)
 
     @functools.lru_cache(maxsize=None)
     def action_space(self, agent):
+        """This agent's action space, identical for every agent."""
         return sasquatch_spaces.action_space(self.max_actions)
 
     # lifecycle
 
     def reset(self, seed=None, options=None):
+        """Starts a new episode."""
         rng = np.random.default_rng(seed)
         if seed is None:
             seed = int(rng.integers(0, 2**63 - 1))
@@ -164,21 +172,23 @@ class SasquatchAECEnv(AECEnv):
         self._update_agent_selection()
 
     def _update_agent_selection(self):
+        """Sets `agent_selection` to whichever agent the engine says is active."""
         if not self.agents:
             self.agent_selection = None
             return
         active = self._game.active_player()
         if active is None:
-            # The game ends for the whole table at once, not one agent at a
-            # time. Per PettingZoo's `_was_dead_step` convention each agent
-            # still needs one more `agent_selection` turn so its terminal
-            # reward is delivered via `last()` before being pruned;
-            # `_was_dead_step` cascades through the rest from here.
+            # the game ends for the whole table at once, not one agent at a
+            # time. per pettingzoo's _was_dead_step convention each agent
+            # still needs one more agent_selection turn so its terminal
+            # reward is delivered via last() before being pruned;
+            # _was_dead_step cascades through the rest from here
             self.agent_selection = self.agents[0]
             return
         self.agent_selection = self.possible_agents[active]
 
     def step(self, action):
+        """Applies one action for the currently selected agent."""
         if not self.agents:
             return
         if self.terminations[self.agent_selection] or self.truncations[self.agent_selection]:
@@ -192,9 +202,9 @@ class SasquatchAECEnv(AECEnv):
         legal_count = self._game.legal_action_count(player_id)
         idx = int(action)
         if not 0 <= idx < legal_count:
-            # An out-of-range (masked-out) index is a policy bug, not a rules
-            # violation - §3.4 says illegal actions default to masking, not
-            # raising, so fail soft onto the first legal action.
+            # an out-of-range (masked-out) index is a policy bug, not a
+            # rules violation. illegal actions default to masking, not
+            # raising, so fail soft onto the first legal action
             idx = 0
         done, winner = self._game.step_index(player_id, idx)
 
@@ -212,6 +222,7 @@ class SasquatchAECEnv(AECEnv):
             self.render()
 
     def observe(self, agent):
+        """This agent's current observation, including its action mask."""
         player_id = self.agent_name_mapping[agent]
         obs = sasquatch_spaces.empty_observation(self.max_actions)
         legal_count = self._game.encode(player_id, obs["state"], obs["actions"])
@@ -220,6 +231,7 @@ class SasquatchAECEnv(AECEnv):
         return obs
 
     def render(self):
+        """Renders the current game state as text, or prints it in human mode."""
         from . import render as render_module
 
         if self.render_mode is None:
@@ -231,6 +243,7 @@ class SasquatchAECEnv(AECEnv):
         return text
 
     def close(self):
+        """Releases the underlying game."""
         self._game = None
 
 

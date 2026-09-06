@@ -1,27 +1,27 @@
-"""Fixed-shape observation/action space definitions (§3.4).
+"""Fixed-shape observation/action space definitions.
 
-Every number here is *read from the Rust encoder* rather than declared
-again on this side. `engine/src/encode.rs` owns the observation layout, and
+Every number here is read from the Rust encoder rather than declared again
+on this side. `engine/src/encode.rs` owns the observation layout, and
 `GameState::max_legal_actions` owns the action-space width, so the two can
 never silently drift apart.
 
 Two conventions are worth knowing before reading anything else:
 
-- **The observation is one flat float32 vector plus one action-feature
-  matrix**, not a dict of per-card slots. Hands and Collections are
+- The observation is one flat float32 vector plus one action-feature
+  matrix, not a dict of per-card slots. Hands and collections are
   unordered sets, so they are encoded as per-class counts (permutation
   invariant, and far smaller than a padded slot per card). Everything is
   padded to `MAX_PLAYERS`/`MAX_DEALS` and expressed relative to the
   observer's own seat, which is what lets a single policy play 2- through
   6-player games.
 
-- **The action space is `Discrete(max_actions)` with an ordinal encoding**:
+- The action space is `Discrete(max_actions)` with an ordinal encoding:
   index `i` means "the i-th entry of `legal_actions()` right now", not a
   fixed absolute action. That sidesteps a combinatorially complete encoding
-  of the nested `Action` type (deal triples, removal subsets, ...) while
-  keeping a fixed-shape space with an explicit mask, per §3.4. Because the
+  of the nested `Action` type (deal triples, removal subsets, and so on)
+  while keeping a fixed-shape space with an explicit mask. Because the
   meaning of `i` changes state to state, the observation carries an
-  `actions` matrix describing what each candidate index actually does - see
+  `actions` matrix describing what each candidate index actually does, see
   `policy.py`, which scores candidates from those descriptions instead of
   having to memorize the engine's enumeration order.
 """
@@ -35,20 +35,29 @@ from gymnasium import spaces
 
 from . import _native as native
 
-# Observation layout, straight from the Rust encoder.
+# observation layout, straight from the Rust encoder
 OBS_LEN: int = native.OBS_LEN
+"""Total width of one observation state vector."""
 ACTION_FEAT_LEN: int = native.ACTION_FEAT_LEN
+"""Width of one action's feature row."""
 NOISE_OFFSET: int = native.NOISE_OFFSET
+"""Offset of the trailing per-episode persona noise block within the state vector."""
 NOISE_LEN: int = native.NOISE_LEN
+"""Width of the persona noise block."""
 MAX_PLAYERS: int = native.MAX_PLAYERS
+"""Largest supported table size."""
 MAX_DEALS: int = native.MAX_DEALS
+"""Largest number of simultaneous active deals padded for."""
 MIN_PLAYERS: int = 2
+"""Smallest supported table size."""
 
 ALL_PLAYER_COUNTS: tuple[int, ...] = tuple(range(MIN_PLAYERS, MAX_PLAYERS + 1))
+"""Every supported table size."""
 
 CARD_CLASSES: list[str] = list(native.CARD_CLASS_NAMES)
+"""Stable card class names, in encoder order."""
 
-# Must match `Phase::name()` in engine/src/phase.rs exactly.
+# must match Phase::name() in engine/src/phase.rs exactly
 PHASES: list[str] = [
     "deal_offer_submit",
     "deal_offer_reveal",
@@ -59,11 +68,14 @@ PHASES: list[str] = [
     "nasty_resolution",
     "game_over",
 ]
+"""Stable phase names, in encoder order."""
 
-# Features are all ratios/one-hots/squashed counts, but a lead margin can go
-# mildly negative and a Collection can briefly overshoot its normalizer, so
-# the declared bounds leave room rather than clipping real values.
+# features are all ratios, one-hots, or squashed counts, but a lead margin
+# can go mildly negative and a collection can briefly overshoot its
+# normalizer, so the declared bounds leave room rather than clipping real
+# values
 _FEATURE_LIMIT = 4.0
+"""Declared bound on every observation and action feature."""
 
 
 def max_legal_actions(deck: "native.Deck", player_counts: Iterable[int] = ALL_PLAYER_COUNTS) -> int:
@@ -97,6 +109,7 @@ def observation_space(max_actions: int, with_action_mask: bool = False) -> space
 
 
 def action_space(max_actions: int) -> spaces.Discrete:
+    """The ordinal `Discrete` action space of the given width."""
     return spaces.Discrete(max_actions)
 
 
@@ -116,12 +129,12 @@ def sample_personas(rng: np.random.Generator, num_players: int) -> np.ndarray:
 
     The last `NOISE_LEN` slots of the state vector are left empty by the
     engine for exactly this. A policy that is deterministic given the state
-    plays the same opening from the same deal every time - easy to read and
-    a poor explorer. Conditioning on a latent that is *constant within an
-    episode but resampled across episodes* lets one set of weights express a
-    family of coherent strategies and commit to one per game, instead of
-    re-rolling its personality on every micro-turn (which is all that
-    sampling from the action distribution gives you).
+    plays the same opening from the same deal every time, which is easy to
+    read and a poor explorer. Conditioning on a latent that is constant
+    within an episode but resampled across episodes lets one set of weights
+    express a family of coherent strategies and commit to one per game,
+    instead of re-rolling its personality on every micro-turn (which is all
+    that sampling from the action distribution gives you).
     """
     return rng.standard_normal((num_players, NOISE_LEN), dtype=np.float32)
 
@@ -140,7 +153,7 @@ def encode_for_player(game, player: int, max_actions: int, persona: np.ndarray |
 
     Returns `(observation, action_mask, legal_count)`. `persona` fills the
     per-episode noise slots; left out, they stay zero, which is a
-    perfectly valid - just maximally bland - persona."""
+    perfectly valid, if maximally bland, persona."""
     obs = empty_observation(max_actions)
     legal_count = game.encode(player, obs["state"], obs["actions"])
     if persona is not None:

@@ -1,27 +1,28 @@
 """Live tracker: drives a real `native.Game` for an actual physical game.
 
-Unlike Watch/Play, nothing here is randomly dealt. Every card keeps an
-arbitrary placeholder kind until the moment it actually becomes known at the
-table - your starting hand up front, and any other card exactly when it's
-revealed - at which point `Game.pin_kind` (engine/src/game.rs) overwrites it
-with the truth. Every other rule (collections, point tokens, discard/draw
-piles, Nasty/Creature set trade-ins, turn order) then runs on the real
-engine exactly as in Watch/Play - you never track any of that by hand.
+Unlike watch/play, nothing here is randomly dealt. Every card keeps an
+arbitrary placeholder kind until the moment it actually becomes known at
+the table (your starting hand up front, and any other card exactly when
+it's revealed), at which point `Game.pin_kind` (engine/src/game.rs)
+overwrites it with the truth. Every other rule (collections, point tokens,
+discard and draw piles, nasty and creature set trade-ins, turn order) then
+runs on the real engine exactly as in watch/play, so you never track any
+of that by hand.
 
 State machine, in one pass over a turn:
   1. If your own hand has any not-yet-pinned card (session start, or right
      after a refill), that's always the first thing asked for.
   2. Otherwise, whoever's turn it is has their legal actions grouped by
-     what's actually distinguishable right now (`_group_actions`) - options
+     what's actually distinguishable right now (`_group_actions`); options
      that would look identical (e.g. every combo of an opponent's fully
      unknown hand) collapse to one, and get auto-applied with no prompt at
      all when there's nothing left to ask.
-  3. A choice that's genuinely open (>=2 distinguishable options) is shown
-     as a `choose_action` prompt - scored by the advisor model when it's
-     your own turn.
+  3. A choice that's genuinely open (two or more distinguishable options)
+     is shown as a `choose_action` prompt, scored by the advisor model
+     when it's your own turn.
   4. Applying some choices needs a card's kind pinned first (an opponent's
      revealed card, a hand card from a Cryptozootic Expander, a peeked
-     card) or needs every still-hidden card across *all* active deals
+     card) or needs every still-hidden card across all active deals
      pinned before a `ChooseDeal`/`RespondToDeal` can be resolved correctly
      (creature/nasty set completion depends on the truth). Those show up as
      `pin_resolution` / `reveal_kind` prompts instead of auto-applying.
@@ -37,15 +38,19 @@ from models import get_model, observation_width
 from scoring import rank_actions
 
 MAX_SETTLE_STEPS = 2000
+"""Safety cap on auto-applied steps per settle pass, guards against an infinite loop bug."""
 
 
 class LiveGameError(Exception):
     """Any invalid live-session request (bad payload, stale prompt, engine
-    rejection) - callers turn this into a 400 with `str(e)`."""
+    rejection); callers turn this into a 400 with `str(e)`."""
 
 
 class LiveSession:
+    """One live-tracked physical game in progress."""
+
     def __init__(self, num_players: int, human_seat: int, deck_path: str, seed: int, advisor_model_spec: str, first_player: int | None = None):
+        """Starts a new live session with every card unpinned."""
         self.game = native.Game(num_players, deck_path, seed, first_player)
         self.num_players = num_players
         self.human_seat = human_seat
@@ -54,14 +59,16 @@ class LiveSession:
         self._awaiting_initial_hand = True
         # {"seat", "action", "unpinned": [CardId], "seller_of": {CardId: seller}}
         self.pending_resolution: dict | None = None
+        """A choose_deal/respond_to_deal action waiting on every hidden deal card to be pinned."""
         # {"reveal_type": "opponent_deal_reveal" | "spectro" | "buyer_peek_followup", ...}
         self.pending_reveal: dict | None = None
+        """A single revealed card waiting on the human to say what it is."""
         self._settle()
 
-    # ------------------------------------------------------------------
     # public API
 
     def state(self) -> dict:
+        """The full JSON state for the live tracker UI: hands, collections, deals, and the current prompt."""
         game = self.game
         obs = game.observation(self.human_seat)
         return {
@@ -106,10 +113,10 @@ class LiveSession:
         else:
             raise LiveGameError("the game is already over")
 
-    # ------------------------------------------------------------------
     # prompt construction
 
     def _current_prompt(self) -> dict:
+        """The single prompt the UI should show right now, in priority order."""
         unpinned_hand = self._unpinned_human_hand()
         if unpinned_hand:
             return {
@@ -135,7 +142,7 @@ class LiveSession:
                 label = f"What was the hidden card revealed in player_{pr['target_deal']}'s deal?"
             elif rt == "buyer_peek_followup":
                 label = f"What did the peek into player_{pr['seller']}'s deal reveal?"
-            else:  # pragma: no cover - defensive
+            else:  # pragma: no cover, defensive
                 raise LiveGameError(f"unknown reveal_type: {rt}")
             return {"type": "reveal_kind", "label": label}
         if self.game.is_game_over():
@@ -163,13 +170,14 @@ class LiveSession:
         }
 
     def _kind_options(self) -> list[dict]:
+        """Every card class the UI can offer for a pin prompt, with remaining supply."""
         supply = self.game.kind_supply()
         return [{"value": c, "label": human_card_class_label(c), "remaining": supply.get(c, 0)} for c in sasquatch_spaces.CARD_CLASSES]
 
-    # ------------------------------------------------------------------
     # the settle loop: auto-apply everything that isn't a genuine choice
 
     def _settle(self) -> None:
+        """Auto-applies actions until a real choice or a pin prompt is needed."""
         for _ in range(MAX_SETTLE_STEPS):
             if self._unpinned_human_hand():
                 return
@@ -187,7 +195,7 @@ class LiveSession:
                 return
             if not self._dispatch(seat, groups[0]["action"]):
                 return
-        raise LiveGameError("live session failed to settle - this is a bug, please report it")
+        raise LiveGameError("live session failed to settle, this is a bug, please report it")
 
     def _dispatch(self, seat: int, action) -> bool:
         """Applies `action` if it can be applied right now, or defers it via
@@ -210,7 +218,7 @@ class LiveSession:
             return False
         if kind == "buyer_peek":
             return self._apply_buyer_peek(seat, payload)
-        raise LiveGameError(f"unhandled pin requirement: {kind}")  # pragma: no cover - defensive
+        raise LiveGameError(f"unhandled pin requirement: {kind}")  # pragma: no cover, defensive
 
     def _pin_requirement(self, action) -> "tuple[str, int] | None":
         """What (if anything) needs a kind pinned before/after `action` can
@@ -228,9 +236,9 @@ class LiveSession:
         return None
 
     def _start_resolution(self, seat: int, action) -> bool:
-        """`ChooseDeal`/`RespondToDeal` award *every* active deal's full
+        """`ChooseDeal`/`RespondToDeal` award every active deal's full
         contents into a collection in one atomic engine call, and set
-        completion has to see the truth to compute correctly - so every
+        completion has to see the truth to compute correctly, so every
         still-hidden card across all deals must be pinned before we call
         it, not just the chosen deal's."""
         unpinned = []
@@ -247,32 +255,34 @@ class LiveSession:
         return False
 
     def _apply_buyer_peek(self, seat: int, target_seller: int) -> bool:
+        """Applies a buyer peek and defers to a reveal prompt unless the peeked card is already pinned."""
         action = native.Action.buyer_peek(target_seller)
         who = "You" if seat == self.human_seat else f"player_{seat}"
         self.log.append(f"{who}: peeked into player_{target_seller}'s deal")
         result = self.game.step(seat, action)
         card = next((ev["card"] for ev in result.events() if ev["type"] == "buyer_peeked"), None)
-        if result.done:  # pragma: no cover - a peek can't itself end the game, kept for safety
+        if result.done:  # pragma: no cover, a peek can't itself end the game, kept for safety
             self.log.append(f"Game over - winner: player_{result.winner}")
         if card is not None and self.game.is_pinned(card):
-            # Recycled via a discard/draw-pile reshuffle - its kind is
-            # already known truth, nothing new to ask about.
+            # recycled via a discard/draw-pile reshuffle, its kind is
+            # already known truth, nothing new to ask about
             self.log.append(f"The peek revealed: {display_name(self.game, card)}")
             return True
         self.pending_reveal = {"reveal_type": "buyer_peek_followup", "card": card, "seller": target_seller}
         return False
 
     def _apply(self, seat: int, action) -> None:
+        """Applies an action that needs no further pinning and logs it."""
         who = "You" if seat == self.human_seat else f"player_{seat}"
         self.log.append(f"{who}: {self._live_action_label(seat, action)}")
         result = self.game.step(seat, action)
         if result.done:
             self.log.append(f"Game over - winner: player_{result.winner}")
 
-    # ------------------------------------------------------------------
     # responding to prompts
 
     def _pin_hand(self, kinds: list[str]) -> None:
+        """Pins every unpinned card in the human's hand from a pin_hand response."""
         unpinned = self._unpinned_human_hand()
         if len(kinds) != len(unpinned):
             raise LiveGameError(f"expected {len(unpinned)} card(s), got {len(kinds)}")
@@ -287,6 +297,7 @@ class LiveSession:
         self._settle()
 
     def _pin_resolution(self, kinds: list[str]) -> None:
+        """Pins every card a pending resolution was waiting on, then applies it."""
         if self.pending_resolution is None:
             raise LiveGameError("no pending resolution")
         pr = self.pending_resolution
@@ -300,6 +311,7 @@ class LiveSession:
         self._settle()
 
     def _fulfill_reveal(self, kind: str) -> None:
+        """Pins a pending reveal's card and applies whatever action it was blocking."""
         if self.pending_reveal is None:
             raise LiveGameError("no pending reveal")
         pr = self.pending_reveal
@@ -311,11 +323,12 @@ class LiveSession:
             self._apply(pr["seat"], pr["action"])
         elif pr["reveal_type"] == "buyer_peek_followup":
             self.log.append(f"The peek revealed: {display_name(self.game, pr['card'])}")
-        else:  # pragma: no cover - defensive
+        else:  # pragma: no cover, defensive
             raise LiveGameError(f"unknown reveal_type: {pr['reveal_type']}")
         self._settle()
 
     def _choose(self, index: int) -> None:
+        """Dispatches the group at `index` from the current choose_action prompt."""
         if self.game.is_game_over():
             raise LiveGameError("the game is already over")
         seat = self.game.active_player()
@@ -327,18 +340,20 @@ class LiveSession:
         self._settle()
 
     def _pin(self, card_id: int, kind: str) -> None:
+        """Pins one card's kind, raising `LiveGameError` on the engine's own rejection."""
         try:
             self.game.pin_kind(card_id, kind)
-        except Exception as e:  # noqa: BLE001 - surface the engine's own message
+        except Exception as e:  # noqa: BLE001, surface the engine's own message
             raise LiveGameError(str(e)) from e
 
-    # ------------------------------------------------------------------
     # small helpers
 
     def _unpinned_human_hand(self) -> list[int]:
+        """Ids of the human's hand cards that still need a kind pinned."""
         return [c for c in self.game.player_hand(self.human_seat) if not self.game.is_pinned(c)]
 
     def _all_active_deal_sellers(self) -> list[int]:
+        """Sellers of every currently active deal."""
         return [d.seller for d in self.game.observation(self.human_seat).deals]
 
     def _group_actions(self, seat: int, legal: list) -> list[dict]:
@@ -357,6 +372,7 @@ class LiveSession:
         return groups
 
     def _score_groups(self, legal: list, groups: list[dict]) -> None:
+        """Scores each action group with the advisor model and flags the best one as recommended."""
         model = get_model(self.advisor_model_spec)
         width = observation_width(model) or self.game.max_legal_actions()
         obs, mask, _ = sasquatch_spaces.encode_for_player(self.game, self.human_seat, width)
@@ -369,7 +385,7 @@ class LiveSession:
     def _live_action_label(self, seat: int, action) -> str:
         """Like `card_display.describe_action`, but shows "???" (or, where
         the specific position is itself a real choice, "hidden card #N")
-        for anything not yet pinned - never leaks a card's true kind before
+        for anything not yet pinned, never leaks a card's true kind before
         it's actually meant to be known."""
         d = action.to_dict()
         t = d["type"]
@@ -387,13 +403,13 @@ class LiveSession:
 
         def pile_label(cid: int) -> str:
             """Like `label`, but for a still-hidden 2-player deal card, names
-            which *pile* it's in instead of a bare "???" - in 2-player mode
+            which pile it's in instead of a bare "???"; in two-player mode
             `reveal_card` can offer cards from either the active player's own
             pile or the pile offered to the other player, and which pile a
             flip came from is a real, physically-visible choice at the table
-            even before the card's kind is known (unlike Buyer mode's single-
-            seller reveal, where every candidate is genuinely interchangeable
-            and collapsing them to one option is correct)."""
+            even before the card's kind is known (unlike buyer mode's
+            single-seller reveal, where every candidate is genuinely
+            interchangeable and collapsing them to one option is correct)."""
             if game.is_pinned(cid):
                 return display_name(game, cid)
             for seller in self._all_active_deal_sellers():
@@ -413,7 +429,7 @@ class LiveSession:
         if t == "buyer_peek":
             return f"Peek into player_{d['target_seller']}'s deal"
         if t == "play_thingamabob":
-            name = label(d["card"])  # always from seat's own collection - always already pinned
+            name = label(d["card"])  # always from seat's own collection, always already pinned
             effect = d["effect"]
             if effect == "platonic_isolator":
                 return f"Play {name}: steal a token from player_{d['target_player']}"
@@ -437,10 +453,11 @@ class LiveSession:
         if t == "resolve_nasty_penalty":
             taken = d["taken_cards"]
             return "Take nothing (decline)" if not taken else f"Take: {', '.join(label(c) for c in taken)}"
-        return str(d)  # pragma: no cover - defensive
+        return str(d)  # pragma: no cover, defensive
 
 
 def _require_list(payload: dict, key: str) -> list:
+    """Extracts `key` from `payload` as a list, raising `LiveGameError` if it's missing or the wrong type."""
     value = payload.get(key)
     if not isinstance(value, list):
         raise LiveGameError(f"expected '{key}': [...]")

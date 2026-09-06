@@ -3,15 +3,17 @@
 //! helpers, so `dead_code` warnings here are expected noise, not signal.
 #![allow(dead_code)]
 
-use sasquatch_engine::action::{Action, ThingamabobParams};
-use sasquatch_engine::card::{CardId, CardKind, PlayerId};
-use sasquatch_engine::deck::DeckConfig;
-use sasquatch_engine::game::{Event, GameState};
+use sasquatch_engine::{
+    action::{Action, ThingamabobParams},
+    card::{CardId, CardKind, PlayerId},
+    deck::DeckConfig,
+    game::{Event, GameState},
+};
 
 /// A deck small enough for fast, deterministic tests but with a rich mix of
 /// every card kind, all set sizes divisible so trade-ins are easy to reason
-/// about. Not the confirmed physical-game deck (`configs/deck.toml`) - see
-/// PROMPT.md §2.5's explicit call-out that smaller decks are fine for tests.
+/// about. Not the confirmed physical-game deck (`configs/deck.toml`); a
+/// smaller synthetic deck is fine for tests that don't need the real one.
 pub const TEST_DECK_TOML: &str = r#"
     [[creature_tiers]]
     tier = "Giant"
@@ -84,11 +86,19 @@ pub fn new_test_game(num_players: usize, seed: u64) -> GameState {
 
 /// Cards of the given kind currently in `player`'s hand.
 pub fn hand_cards_of_kind(game: &GameState, player: PlayerId, kind: CardKind) -> Vec<CardId> {
-    game.player_hand(player).iter().copied().filter(|&c| game.card_kind(c) == Some(kind)).collect()
+    game.player_hand(player)
+        .iter()
+        .copied()
+        .filter(|&c| game.card_kind(c) == Some(kind))
+        .collect()
 }
 
 pub fn collection_cards_of_kind(game: &GameState, player: PlayerId, kind: CardKind) -> Vec<CardId> {
-    game.player_collection(player).iter().copied().filter(|&c| game.card_kind(c) == Some(kind)).collect()
+    game.player_collection(player)
+        .iter()
+        .copied()
+        .filter(|&c| game.card_kind(c) == Some(kind))
+        .collect()
 }
 
 /// Drives the deal-offer micro-turns for every entry automatically: submits
@@ -96,22 +106,29 @@ pub fn collection_cards_of_kind(game: &GameState, player: PlayerId, kind: CardKi
 /// reveal is required. Returns once the deal-offer phase is fully done.
 pub fn auto_play_deal_offers(game: &mut GameState) -> Vec<Event> {
     let mut events = Vec::new();
-    while game.current_phase() == "deal_offer_submit" || game.current_phase() == "deal_offer_reveal" {
+    while game.current_phase() == "deal_offer_submit" || game.current_phase() == "deal_offer_reveal"
+    {
         let players = game.active_players();
         let player = players[0];
         let actions = game.legal_actions(player);
-        let action = actions.into_iter().next().expect("no legal deal-offer action");
+        let action = actions
+            .into_iter()
+            .next()
+            .expect("no legal deal-offer action");
         events.extend(game.apply_action(player, action).unwrap());
     }
     events
 }
 
-/// Passes the Thingamabob window for every player until it closes.
+/// Passes the thingamabob window for every player until it closes.
 pub fn auto_pass_thingamabob_window(game: &mut GameState) -> Vec<Event> {
     let mut events = Vec::new();
     while game.current_phase() == "thingamabob_window" {
         let player = game.active_players()[0];
-        events.extend(game.apply_action(player, Action::PassThingamabobWindow).unwrap());
+        events.extend(
+            game.apply_action(player, Action::PassThingamabobWindow)
+                .unwrap(),
+        );
     }
     events
 }
@@ -119,11 +136,19 @@ pub fn auto_pass_thingamabob_window(game: &mut GameState) -> Vec<Event> {
 /// Drives one full turn from the start of `deal_offer_submit`, having the
 /// first eligible non-buyer player with `count` (<=3) hand cards of `kind`
 /// submit them (padded with filler up to 3) as their deal, then having the
-/// Buyer choose a *different* seller's deal so this player keeps their own
-/// cards - including the target ones - in their Collection (§2.3 step 5).
+/// buyer choose a different seller's deal so this player keeps their own
+/// cards, including the target ones, in their collection (since a
+/// non-chosen seller's cards stay with them).
 /// Returns the seller who ended up stashing them, if any player qualified.
-pub fn stash_cards_of_kind_in_collection(game: &mut GameState, kind: CardKind, count: usize) -> Option<PlayerId> {
-    assert!(game.current_phase() == "deal_offer_submit", "must be called at the start of a turn");
+pub fn stash_cards_of_kind_in_collection(
+    game: &mut GameState,
+    kind: CardKind,
+    count: usize,
+) -> Option<PlayerId> {
+    assert!(
+        game.current_phase() == "deal_offer_submit",
+        "must be called at the start of a turn"
+    );
     let buyer = game.turn_leader();
     let mut target_seller = None;
     while game.current_phase().starts_with("deal_offer") {
@@ -134,11 +159,18 @@ pub fn stash_cards_of_kind_in_collection(game: &mut GameState, kind: CardKind, c
                 target_seller = Some(player);
                 let mut cards: Vec<_> = matching.into_iter().take(count).collect();
                 while cards.len() < 3 {
-                    let filler = game.player_hand(player).iter().copied().find(|c| !cards.contains(c)).unwrap();
+                    let filler = game
+                        .player_hand(player)
+                        .iter()
+                        .copied()
+                        .find(|c| !cards.contains(c))
+                        .unwrap();
                     cards.push(filler);
                 }
                 cards.truncate(3);
-                Action::SubmitDeal { cards: [cards[0], cards[1], cards[2]] }
+                Action::SubmitDeal {
+                    cards: [cards[0], cards[1], cards[2]],
+                }
             } else {
                 game.legal_actions(player).into_iter().next().unwrap()
             };
@@ -161,18 +193,40 @@ pub fn stash_cards_of_kind_in_collection(game: &mut GameState, kind: CardKind, c
     if game.current_phase() == "buyer_chooses_deal" {
         let options = game.legal_actions(buyer);
         let other = target_seller
-            .and_then(|seller| options.iter().find_map(|a| if let Action::ChooseDeal { seller: s } = a { (*s != seller).then_some(*s) } else { None }))
-            .unwrap_or_else(|| if let Action::ChooseDeal { seller } = options[0] { seller } else { unreachable!() });
-        game.apply_action(buyer, Action::ChooseDeal { seller: other }).unwrap();
+            .and_then(|seller| {
+                options.iter().find_map(|a| {
+                    if let Action::ChooseDeal { seller: s } = a {
+                        (*s != seller).then_some(*s)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_else(|| {
+                if let Action::ChooseDeal { seller } = options[0] {
+                    seller
+                } else {
+                    unreachable!()
+                }
+            });
+        game.apply_action(buyer, Action::ChooseDeal { seller: other })
+            .unwrap();
     } else if game.current_phase() == "respond_to_deal" {
         let responder = game.active_players()[0];
-        game.apply_action(responder, Action::RespondToDeal { reverse: false }).unwrap();
+        game.apply_action(responder, Action::RespondToDeal { reverse: false })
+            .unwrap();
     }
     // Drain any pending Nasty-penalty choices (decline every time) so the
     // caller always lands back at the start of a fresh turn's deal offer.
     while game.current_phase() == "nasty_resolution" {
         let resolver = game.active_players()[0];
-        game.apply_action(resolver, Action::ResolveNastyPenalty { taken_cards: vec![] }).unwrap();
+        game.apply_action(
+            resolver,
+            Action::ResolveNastyPenalty {
+                taken_cards: vec![],
+            },
+        )
+        .unwrap();
     }
     target_seller
 }
@@ -182,7 +236,8 @@ pub fn stash_cards_of_kind_in_collection(game: &mut GameState, kind: CardKind, c
 pub fn advance_thingamabob_window_to_player(game: &mut GameState, target: PlayerId) {
     while game.current_phase() == "thingamabob_window" && game.active_players()[0] != target {
         let player = game.active_players()[0];
-        game.apply_action(player, Action::PassThingamabobWindow).unwrap();
+        game.apply_action(player, Action::PassThingamabobWindow)
+            .unwrap();
     }
 }
 
@@ -194,5 +249,7 @@ pub fn find_thingamabob_action(
     player: PlayerId,
     mut pred: impl FnMut(&ThingamabobParams) -> bool,
 ) -> Option<Action> {
-    game.legal_actions(player).into_iter().find(|a| matches!(a, Action::PlayThingamabob { params, .. } if pred(params)))
+    game.legal_actions(player)
+        .into_iter()
+        .find(|a| matches!(a, Action::PlayThingamabob { params, .. } if pred(params)))
 }

@@ -1,9 +1,9 @@
-# Sell Me a Sasquatch — confirmed deck composition (120 cards total)
-# Creatures are fungible within a tier (no individual card behavior),
-# so they're modeled as tier-level pools, not named cards.
+# sell me a sasquatch, confirmed deck composition (120 cards total)
+# creatures are fungible within a tier (no individual card behavior),
+# so they're modeled as tier-level pools, not named cards
 #
-# This file is authoritative game data (verified against a physical copy).
-# Do not regenerate or "rebalance" these numbers.
+# this file is authoritative game data (verified against a physical copy),
+# do not regenerate or rebalance these numbers
 
 [[creature_tiers]]
 tier = "Giant"
@@ -24,7 +24,7 @@ copies = 25
 tier = "Tiny"
 set_size = 4
 copies = 20
-# Creature subtotal: 4 + 16 + 25 + 20 = 65
+# creature subtotal: 4 + 16 + 25 + 20 = 65
 
 [[nasties]]
 name = "Poison Pill Bug"
@@ -43,7 +43,7 @@ name = "Trojan Horse"
 set_size = 3
 copies = 12
 effect = "buyer_steals_1_point_token"
-# Nasties subtotal: 10 + 10 + 12 = 32
+# nasties subtotal: 10 + 10 + 12 = 32
 
 [[thingamabobs]]
 name = "Platonic Isolator"
@@ -69,6 +69,6 @@ effect = "add_hidden_hand_card_to_deal"
 name = "Spectroelectric Optimeter"
 copies = 5
 effect = "reveal_1_card_in_a_deal"
-# Thingamabob subtotal: 3 + 6 + 3 + 6 + 5 = 23
+# thingamabob subtotal: 3 + 6 + 3 + 6 + 5 = 23
 
-# GRAND TOTAL: 65 + 32 + 23 = 120
+# grand total: 65 + 32 + 23 = 120

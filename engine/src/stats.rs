@@ -1,49 +1,58 @@
-//! Per-episode *memory* features.
+//! Per-episode memory features.
 //!
 //! A single micro-step observation is a snapshot: it says what the tableau
 //! looks like right now, but nothing about how the table got there. That
-//! makes the environment a fairly deep POMDP - "this opponent has dumped
-//! three Thingamabobs and stolen two tokens already" is exactly the kind of
+//! makes the environment a fairly deep POMDP; "this opponent has dumped
+//! three thingamabobs and stolen two tokens already" is exactly the kind of
 //! thing a good player tracks and a memoryless policy cannot.
 //!
 //! Rather than pay for a recurrent policy (which does not compose with
 //! action masking in sb3-contrib), the engine keeps the memory itself: every
-//! `Event` the rules produce folds into a small per-player behavioral
+//! [`Event`] the rules produce folds into a small per-player behavioral
 //! summary plus a decayed histogram of recent event kinds. Both are then
 //! encoded into the observation (see `encode.rs`), so an ordinary
 //! feed-forward policy still sees a running history of the episode.
 
-use crate::card::PlayerId;
-use crate::game::Event;
+use crate::{card::PlayerId, game::Event};
 
-/// One slot per `Event` variant.
+/// One slot per [`Event`] variant.
 pub const NUM_EVENT_KINDS: usize = 17;
 
-/// Per-micro-step decay of `GameState::event_memory`. At 0.8 an event still
-/// contributes ~10% of its weight ten micro-steps later, which is roughly
-/// one full turn - long enough to carry "what happened this turn" without
-/// smearing the whole episode into a constant.
+/// Per-micro-step decay applied to the game state's event memory. At 0.8 an
+/// event still contributes about 10% of its weight ten micro-steps later,
+/// which is roughly one full turn; long enough to carry "what happened this
+/// turn" without smearing the whole episode into a constant.
 pub const EVENT_MEMORY_DECAY: f32 = 0.8;
 
-/// Number of floats `PlayerStats::write_features` emits.
+/// Number of floats [`PlayerStats::write_features`] emits.
 pub const PLAYER_STAT_LEN: usize = 10;
 
-/// Cumulative counts of what one seat has done/suffered this episode.
+/// Cumulative counts of what one seat has done or suffered this episode.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PlayerStats {
+    /// Number of deals this player has submitted as a seller.
     pub deals_submitted: u32,
+    /// Number of thingamabobs this player has played.
     pub thingamabobs_played: u32,
+    /// Point tokens gained.
     pub tokens_gained: u32,
+    /// Point tokens lost.
     pub tokens_lost: u32,
+    /// Cards gained.
     pub cards_gained: u32,
+    /// Cards lost.
     pub cards_lost: u32,
+    /// Nasty sets traded in.
     pub nasty_sets_traded: u32,
+    /// Creature sets traded in.
     pub creature_sets_traded: u32,
+    /// Number of turns this player has led.
     pub turns_led: u32,
+    /// Number of deals this player has bought.
     pub deals_bought: u32,
 }
 
-/// Squash an unbounded count into `[0, 1)`, monotonically. Keeps every
+/// Squashes an unbounded count into `[0, 1)`, monotonically. Keeps every
 /// memory feature on the same scale as the rest of the observation without
 /// needing a running normalizer or a hand-picked cap per statistic.
 #[inline]
@@ -53,7 +62,7 @@ fn squash(count: u32) -> f32 {
 }
 
 impl PlayerStats {
-    /// Writes exactly `PLAYER_STAT_LEN` features into `out`.
+    /// Writes exactly [`PLAYER_STAT_LEN`] features into `out`.
     pub fn write_features(&self, out: &mut [f32]) {
         debug_assert_eq!(out.len(), PLAYER_STAT_LEN);
         out[0] = squash(self.deals_submitted);
@@ -69,9 +78,9 @@ impl PlayerStats {
     }
 }
 
-/// Stable slot for `event_memory`. Order is an implementation detail - only
-/// stability across a build matters, since nothing outside this crate names
-/// individual slots.
+/// Stable slot for the event memory histogram. Order is an implementation
+/// detail; only stability across a build matters, since nothing outside
+/// this crate names individual slots.
 pub fn event_kind_index(event: &Event) -> usize {
     match event {
         Event::DealSubmitted { .. } => 0,
@@ -95,9 +104,9 @@ pub fn event_kind_index(event: &Event) -> usize {
 }
 
 /// Folds one event into the per-player summaries. `stats` is indexed by
-/// `PlayerId`; events naming a player out of range are ignored rather than
-/// panicking (nothing in the engine produces one, but this keeps the
-/// bookkeeping path total).
+/// [`PlayerId`]; events naming a player out of range are ignored rather
+/// than panicking. Nothing in the engine produces one, but this keeps the
+/// bookkeeping path total.
 pub fn record(stats: &mut [PlayerStats], event: &Event) {
     let mut bump = |p: PlayerId, f: fn(&mut PlayerStats)| {
         if let Some(s) = stats.get_mut(p) {
@@ -163,8 +172,22 @@ mod tests {
     #[test]
     fn steals_credit_both_sides() {
         let mut stats = vec![PlayerStats::default(); 3];
-        record(&mut stats, &Event::PointTokenStolen { from: 2, to: 0, amount: 1 });
-        record(&mut stats, &Event::CardsStolen { from: 2, to: 0, cards: vec![7, 8] });
+        record(
+            &mut stats,
+            &Event::PointTokenStolen {
+                from: 2,
+                to: 0,
+                amount: 1,
+            },
+        );
+        record(
+            &mut stats,
+            &Event::CardsStolen {
+                from: 2,
+                to: 0,
+                cards: vec![7, 8],
+            },
+        );
         assert_eq!(stats[0].tokens_gained, 1);
         assert_eq!(stats[2].tokens_lost, 1);
         assert_eq!(stats[0].cards_gained, 2);
@@ -176,15 +199,38 @@ mod tests {
         let events = [
             Event::DealSubmitted { player: 0 },
             Event::CardRevealed { seller: 0, card: 0 },
-            Event::BuyerPeeked { target_seller: 0, card: 0 },
+            Event::BuyerPeeked {
+                target_seller: 0,
+                card: 0,
+            },
             Event::ThingamabobWindowClosed,
-            Event::DealChosen { buyer: 0, seller: 1 },
-            Event::DealResponded { active: 0, reverse: false },
-            Event::CardsAwarded { player: 0, cards: vec![] },
+            Event::DealChosen {
+                buyer: 0,
+                seller: 1,
+            },
+            Event::DealResponded {
+                active: 0,
+                reverse: false,
+            },
+            Event::CardsAwarded {
+                player: 0,
+                cards: vec![],
+            },
             Event::CardsDiscarded { cards: vec![] },
-            Event::PointTokenStolen { from: 0, to: 1, amount: 1 },
-            Event::CardsStolen { from: 0, to: 1, cards: vec![] },
-            Event::HandRefilled { player: 0, drawn: 1 },
+            Event::PointTokenStolen {
+                from: 0,
+                to: 1,
+                amount: 1,
+            },
+            Event::CardsStolen {
+                from: 0,
+                to: 1,
+                cards: vec![],
+            },
+            Event::HandRefilled {
+                player: 0,
+                drawn: 1,
+            },
             Event::DrawPileReshuffledFromDiscard,
             Event::TurnLeaderPassed { new_leader: 0 },
             Event::GameOver { winner: 0 },

@@ -1,4 +1,4 @@
-//! Fixed-shape observation encoding (§3.4), done in Rust.
+//! Fixed-shape observation encoding, done in Rust.
 //!
 //! The Python side used to rebuild this vector card by card, calling back
 //! across the FFI boundary once per card just to learn its kind. Encoding
@@ -8,28 +8,34 @@
 //! Three properties matter more than the exact field list:
 //!
 //! * **Fixed shape for every table size.** Everything is padded out to
-//!   `MAX_PLAYERS` / `MAX_DEALS` with explicit validity flags, so one policy
-//!   trains and plays across 2- through 6-player games (2-player being the
-//!   materially different §2.7 variant) instead of one model per table size.
+//!   [`MAX_PLAYERS`] / [`MAX_DEALS`] with explicit validity flags, so one
+//!   policy trains and plays across 2- through 6-player games (2-player
+//!   being the materially different variant) instead of one model per
+//!   table size.
 //! * **Ego-centric.** Seat `k` in the encoding is always "the player `k`
 //!   seats after me", never absolute seat `k`. A policy therefore cannot
 //!   learn seat-specific habits, and what it learns at one seat transfers to
 //!   every other.
-//! * **Class counts, not card slots.** Hands and Collections are unordered
+//! * **Class counts, not card slots.** Hands and collections are unordered
 //!   sets; encoding them as per-class counts is permutation-invariant, and
 //!   an order of magnitude smaller than one padded slot per card.
 
-use crate::action::{Action, ThingamabobParams};
-use crate::card::{CardId, CardKind, NastyKind, PlayerId, Tier, NUM_CARD_CLASSES};
-use crate::game::{GameMode, GameState};
-use crate::phase::Phase;
-use crate::stats::{NUM_EVENT_KINDS, PLAYER_STAT_LEN};
+use crate::{
+    action::{Action, ThingamabobParams},
+    card::{CardId, CardKind, NastyKind, PlayerId, Tier, NUM_CARD_CLASSES},
+    game::{GameMode, GameState},
+    phase::Phase,
+    stats::{NUM_EVENT_KINDS, PLAYER_STAT_LEN},
+};
 
+/// Largest supported table size.
 pub const MAX_PLAYERS: usize = 6;
+/// Smallest supported table size.
 pub const MIN_PLAYERS: usize = 2;
-/// Buyer mode runs at most `num_players - 1` deals and 2-player mode exactly
-/// two, so 6 is comfortable headroom on the real maximum of 5.
+/// Buyer mode runs at most `num_players - 1` deals and two-player mode
+/// exactly two, so 6 is comfortable headroom on the real maximum of 5.
 pub const MAX_DEALS: usize = 6;
+/// Number of distinct turn phases.
 pub const NUM_PHASES: usize = 8;
 
 /// Per-episode random "persona" vector. The engine writes zeros here; the
@@ -43,16 +49,26 @@ pub const NUM_PHASES: usize = 8;
 /// personality on every micro-turn.
 pub const NOISE_LEN: usize = 8;
 
+/// Width of the global feature block.
 const GLOBAL_LEN: usize = NUM_PHASES + 2 + (MAX_PLAYERS - MIN_PLAYERS + 1) + 7 + MAX_PLAYERS;
+/// Width of the observer's own hand block.
 const HAND_LEN: usize = NUM_CARD_CLASSES + 1;
+/// Width of one player's block.
 const PER_PLAYER_LEN: usize = 1 + NUM_CARD_CLASSES + 6 + 4 + 3 + PLAYER_STAT_LEN;
+/// Width of one deal's block.
 const PER_DEAL_LEN: usize = 1 + MAX_PLAYERS + 1 + NUM_CARD_CLASSES + 2;
+/// Width of the card-counting block.
 const COUNTING_LEN: usize = 2 * NUM_CARD_CLASSES + 1;
 
-pub const NOISE_OFFSET: usize =
-    GLOBAL_LEN + HAND_LEN + MAX_PLAYERS * PER_PLAYER_LEN + MAX_DEALS * PER_DEAL_LEN + COUNTING_LEN + NUM_EVENT_KINDS;
+/// Offset of the trailing noise block within the observation.
+pub const NOISE_OFFSET: usize = GLOBAL_LEN
+    + HAND_LEN
+    + MAX_PLAYERS * PER_PLAYER_LEN
+    + MAX_DEALS * PER_DEAL_LEN
+    + COUNTING_LEN
+    + NUM_EVENT_KINDS;
 
-/// Total width of `GameState::encode_observation`.
+/// Total width of [`GameState::encode_observation`].
 pub const OBS_LEN: usize = NOISE_OFFSET + NOISE_LEN;
 
 /// Saturating squash of an unbounded count into `[0, 1)`.
@@ -73,17 +89,21 @@ fn one_hot(out: &mut [f32], slot: usize) {
 /// floats and advances, so adding a field can never silently overlap the
 /// next block.
 struct Writer<'a> {
+    /// The buffer being written into.
     buf: &'a mut [f32],
+    /// Current write position.
     at: usize,
 }
 
 impl<'a> Writer<'a> {
+    /// Takes the next `n` floats and advances past them.
     fn take(&mut self, n: usize) -> &mut [f32] {
         let start = self.at;
         self.at += n;
         &mut self.buf[start..self.at]
     }
 
+    /// Writes one float and advances past it.
     fn put(&mut self, v: f32) {
         self.buf[self.at] = v;
         self.at += 1;
@@ -94,7 +114,11 @@ impl GameState {
     /// Fills `out` (exactly `OBS_LEN` floats) with `player`'s view of the
     /// game. Leaves the trailing `NOISE_LEN` slots at zero for the caller.
     pub fn encode_observation(&self, player: PlayerId, out: &mut [f32]) {
-        assert_eq!(out.len(), OBS_LEN, "observation buffer must be OBS_LEN wide");
+        assert_eq!(
+            out.len(),
+            OBS_LEN,
+            "observation buffer must be OBS_LEN wide"
+        );
         out.fill(0.0);
         let n = self.num_players;
         let deck_total: f32 = self.deck_counts.iter().sum::<u32>().max(1) as f32;
@@ -102,9 +126,16 @@ impl GameState {
         let active = self.active_player();
         let mut w = Writer { buf: out, at: 0 };
 
-        // --- global -------------------------------------------------------
+        // global block
         one_hot(w.take(NUM_PHASES), phase_index(&self.phase));
-        one_hot(w.take(2), if self.mode == GameMode::TwoPlayer { 1 } else { 0 });
+        one_hot(
+            w.take(2),
+            if self.mode == GameMode::TwoPlayer {
+                1
+            } else {
+                0
+            },
+        );
         one_hot(w.take(MAX_PLAYERS - MIN_PLAYERS + 1), n - MIN_PLAYERS);
         w.put(self.win_threshold as f32 / MAX_PLAYERS as f32);
         w.put(self.draw_pile.len() as f32 / deck_total);
@@ -115,7 +146,7 @@ impl GameState {
         w.put(f32::from(self.turn_leader == player));
         one_hot(w.take(MAX_PLAYERS), (self.turn_leader + n - player) % n);
 
-        // --- own hand -----------------------------------------------------
+        // observer's own hand
         let hand = &self.players[player].hand;
         let hand_counts = w.take(NUM_CARD_CLASSES);
         self.tally_into(hand, hand_counts);
@@ -124,15 +155,15 @@ impl GameState {
         }
         w.put(hand.len() as f32 / crate::game::HAND_SIZE as f32);
 
-        // --- players, in ego order (slot 0 is always "me") ----------------
-        // `seen` doubles as the card-counting accumulator: every class the
-        // observer can legitimately account for lands in it.
+        // players, in ego order, slot 0 is always "me". `seen` doubles as
+        // the card-counting accumulator: every class the observer can
+        // legitimately account for lands in it
         let mut seen = [0f32; NUM_CARD_CLASSES];
         self.tally_into(hand, &mut seen);
         for offset in 0..MAX_PLAYERS {
             let block = w.take(PER_PLAYER_LEN);
             if offset >= n {
-                continue; // padding seat: validity flag stays 0
+                continue; // padding seat, validity flag stays 0
             }
             let seat = (player + offset) % n;
             let p = &self.players[seat];
@@ -149,11 +180,12 @@ impl GameState {
             let mut cursor = 1 + NUM_CARD_CLASSES;
             block[cursor] = squash(p.collection.len() as f32 / 8.0);
             block[cursor + 1] = p.point_tokens as f32 / threshold;
-            block[cursor + 2] = ((self.win_threshold as f32 - p.point_tokens as f32) / threshold).max(0.0);
+            block[cursor + 2] =
+                ((self.win_threshold as f32 - p.point_tokens as f32) / threshold).max(0.0);
             block[cursor + 3] = f32::from(seat == self.turn_leader);
             block[cursor + 4] = f32::from(active == Some(seat));
-            // Lead margin against the best *other* seat: the quantity that
-            // actually has to go positive to win (§2.6).
+            // lead margin against the best other seat, the quantity that
+            // actually has to go positive to win
             let best_other = self
                 .players
                 .iter()
@@ -165,8 +197,8 @@ impl GameState {
             block[cursor + 5] = (p.point_tokens as f32 - best_other as f32) / threshold;
             cursor += 6;
 
-            // How close this seat is to completing each set (§2.3 step 6):
-            // Creature sets score a Point Token, Nasty sets fire a penalty.
+            // how close this seat is to completing each set: creature sets
+            // score a point token, nasty sets fire a penalty
             for (i, tier) in Tier::ALL.iter().enumerate() {
                 let have = counts[CardKind::Creature(*tier).class_index()];
                 let size = self.catalog.creature_set_size(*tier).max(1) as f32;
@@ -183,10 +215,12 @@ impl GameState {
             self.stats[seat].write_features(&mut block[cursor..cursor + PLAYER_STAT_LEN]);
         }
 
-        // --- deals --------------------------------------------------------
+        // deals
         for slot in 0..MAX_DEALS {
             let block = w.take(PER_DEAL_LEN);
-            let Some(deal) = self.deals.get(slot) else { continue };
+            let Some(deal) = self.deals.get(slot) else {
+                continue;
+            };
             let mut counts = [0f32; NUM_CARD_CLASSES];
             let mut num_revealed = 0f32;
             for c in deal.cards.iter().filter(|c| c.revealed) {
@@ -196,7 +230,10 @@ impl GameState {
             }
 
             block[0] = 1.0;
-            one_hot(&mut block[1..1 + MAX_PLAYERS], (deal.seller + n - player) % n);
+            one_hot(
+                &mut block[1..1 + MAX_PLAYERS],
+                (deal.seller + n - player) % n,
+            );
             let mut cursor = 1 + MAX_PLAYERS;
             block[cursor] = f32::from(deal.seller == player);
             cursor += 1;
@@ -208,10 +245,10 @@ impl GameState {
             block[cursor + 1] = (deal.cards.len() as f32 - num_revealed) / 4.0;
         }
 
-        // --- card counting ------------------------------------------------
-        // Discards are face up at a real table, so they count as seen; the
-        // remainder is genuinely unknown (draw pile + other hands + hidden
-        // deal cards) and is what a card counter actually tracks.
+        // card counting. discards are face up at a real table, so they
+        // count as seen; the remainder is genuinely unknown (draw pile,
+        // other hands, hidden deal cards) and is what a card counter
+        // actually tracks
         let mut discard = [0f32; NUM_CARD_CLASSES];
         self.tally_into(&self.discard_pile, &mut discard);
         for (class, &c) in discard.iter().enumerate() {
@@ -231,7 +268,7 @@ impl GameState {
         w.take(NUM_CARD_CLASSES).copy_from_slice(&unseen);
         w.put(unseen_total / deck_total);
 
-        // --- episode memory -----------------------------------------------
+        // episode memory
         let memory = w.take(NUM_EVENT_KINDS);
         for (slot, &v) in memory.iter_mut().zip(self.event_memory.iter()) {
             *slot = squash(v);
@@ -240,6 +277,7 @@ impl GameState {
         debug_assert_eq!(w.at, NOISE_OFFSET);
     }
 
+    /// Adds one count per card in `cards` to its class slot in `counts`.
     fn tally_into(&self, cards: &[CardId], counts: &mut [f32]) {
         for &c in cards {
             counts[self.class_of(c)] += 1.0;
@@ -247,6 +285,7 @@ impl GameState {
     }
 }
 
+/// Stable slot for a phase in the one-hot phase block.
 fn phase_index(phase: &Phase) -> usize {
     match phase.name() {
         "deal_offer_submit" => 0,
@@ -260,41 +299,52 @@ fn phase_index(phase: &Phase) -> usize {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Action features
-// ---------------------------------------------------------------------------
+// action features
 
-/// Width of one action's feature row (see `encode_actions`).
+/// Width of one action's feature row, see [`GameState::encode_actions`].
 pub const ACTION_FEAT_LEN: usize = 43;
 
+/// Offset of the action-type one-hot block.
 const AF_TYPE: usize = 0;
+/// Number of distinct action types.
 const AF_NUM_TYPES: usize = 9;
+/// Offset of the committed-cards class-count block.
 const AF_COMMITTED: usize = AF_TYPE + AF_NUM_TYPES;
+/// Offset of the target-cards class-count block.
 const AF_TARGET_CARDS: usize = AF_COMMITTED + NUM_CARD_CLASSES;
+/// Offset of the target-seat one-hot block.
 const AF_TARGET_SEAT: usize = AF_TARGET_CARDS + NUM_CARD_CLASSES;
+/// Offset of the target-is-self flag.
 const AF_TARGET_IS_SELF: usize = AF_TARGET_SEAT + MAX_PLAYERS;
+/// Offset of the hidden-target count.
 const AF_HIDDEN_TARGETS: usize = AF_TARGET_IS_SELF + 1;
+/// Offset of the reverse-decision flag.
 const AF_REVERSE: usize = AF_HIDDEN_TARGETS + 1;
+/// Offset of the deals-touched count.
 const AF_DEALS_TOUCHED: usize = AF_REVERSE + 1;
 
 impl GameState {
-    /// Describes what each currently-legal action *does*, one
-    /// `ACTION_FEAT_LEN`-wide row per action.
+    /// Describes what each currently-legal action does, one
+    /// [`ACTION_FEAT_LEN`]-wide row per action.
     ///
-    /// The action space is ordinal - index `i` means "the i-th entry of
-    /// `legal_actions()` right now" - which keeps the space fixed-width
-    /// without a combinatorial encoding of the nested `Action` type, but on
-    /// its own leaves the policy guessing: the same index means a different
-    /// move in every state. These rows close that gap. A policy scores each
-    /// candidate from its own description (see the pointer-style policy in
-    /// `python/sell_me_a_sasquatch/policy.py`) instead of having to memorize
-    /// the enumeration order the engine happens to use.
+    /// The action space is ordinal; index `i` means "the i-th entry of
+    /// [`GameState::legal_actions`] right now", which keeps the space
+    /// fixed-width without a combinatorial encoding of the nested [`Action`]
+    /// type, but on its own leaves the policy guessing, since the same
+    /// index means a different move in every state. These rows close that
+    /// gap. A policy scores each candidate from its own description (see
+    /// the pointer-style policy in `python/sell_me_a_sasquatch/policy.py`)
+    /// instead of having to memorize the enumeration order the engine
+    /// happens to use.
     ///
-    /// Privacy is preserved exactly as in `legal_actions`: a targeted card
-    /// contributes its class only when it is already face up. Still-hidden
-    /// targets contribute to a count, never to a class.
+    /// Privacy is preserved exactly as in [`GameState::legal_actions`]: a
+    /// targeted card contributes its class only when it is already face
+    /// up. Still-hidden targets contribute to a count, never to a class.
     pub fn encode_actions(&self, player: PlayerId, actions: &[Action], out: &mut [f32]) {
-        assert!(out.len().is_multiple_of(ACTION_FEAT_LEN), "action buffer must be a whole number of rows");
+        assert!(
+            out.len().is_multiple_of(ACTION_FEAT_LEN),
+            "action buffer must be a whole number of rows"
+        );
         out.fill(0.0);
         let rows = out.len() / ACTION_FEAT_LEN;
         let n = self.num_players;
@@ -313,14 +363,17 @@ impl GameState {
                         row[AF_COMMITTED + self.class_of(c)] += 1.0 / 3.0;
                     }
                 }
-                Action::TwoPlayerSubmitDeal { own_pile, other_pile } => {
+                Action::TwoPlayerSubmitDeal {
+                    own_pile,
+                    other_pile,
+                } => {
                     row[AF_TYPE + 1] = 1.0;
                     for &c in own_pile {
                         row[AF_COMMITTED + self.class_of(c)] += 1.0 / 3.0;
                     }
-                    // The opposite pile is the offer to the other seat - its
+                    // the opposite pile is the offer to the other seat's
                     // own cards, but the decision that matters is which
-                    // classes land on which side.
+                    // classes land on which side
                     for &c in other_pile {
                         row[AF_TARGET_CARDS + self.class_of(c)] += 1.0 / 3.0;
                     }
@@ -346,7 +399,8 @@ impl GameState {
                             target_seat = *target_player;
                         }
                         ThingamabobParams::RemoveFromDeals { removals } => {
-                            let mut sellers: Vec<PlayerId> = removals.iter().map(|(s, _)| *s).collect();
+                            let mut sellers: Vec<PlayerId> =
+                                removals.iter().map(|(s, _)| *s).collect();
                             sellers.sort_unstable();
                             sellers.dedup();
                             row[AF_DEALS_TOUCHED] = sellers.len() as f32 / 2.0;
@@ -361,7 +415,10 @@ impl GameState {
                                 }
                             }
                         }
-                        ThingamabobParams::CryptozooticExpander { hand_card, target_deal } => {
+                        ThingamabobParams::CryptozooticExpander {
+                            hand_card,
+                            target_deal,
+                        } => {
                             row[AF_COMMITTED + self.class_of(*hand_card)] += 1.0;
                             target_seat = *target_deal;
                         }
@@ -396,7 +453,7 @@ impl GameState {
                 }
                 Action::ResolveNastyPenalty { taken_cards } => {
                     row[AF_TYPE + 8] = 1.0;
-                    // Collections are public, so every steal target is known.
+                    // collections are public, so every steal target is known
                     for &c in taken_cards {
                         row[AF_TARGET_CARDS + self.class_of(c)] += 1.0 / 2.0;
                     }
@@ -406,13 +463,18 @@ impl GameState {
                 }
             }
 
-            one_hot(&mut row[AF_TARGET_SEAT..AF_TARGET_SEAT + MAX_PLAYERS], (target_seat + n - player) % n);
+            one_hot(
+                &mut row[AF_TARGET_SEAT..AF_TARGET_SEAT + MAX_PLAYERS],
+                (target_seat + n - player) % n,
+            );
             row[AF_TARGET_IS_SELF] = f32::from(target_seat == player);
         }
     }
 
+    /// Whether the given card in the given seller's deal is face up.
     fn deal_card_is_revealed(&self, seller: PlayerId, card: CardId) -> bool {
-        self.deal_for_seller(seller).is_some_and(|d| d.cards.iter().any(|c| c.card == card && c.revealed))
+        self.deal_for_seller(seller)
+            .is_some_and(|d| d.cards.iter().any(|c| c.card == card && c.revealed))
     }
 }
 
@@ -439,8 +501,14 @@ mod tests {
                 }
                 for p in 0..n {
                     g.encode_observation(p, &mut buf);
-                    assert!(buf.iter().all(|v| v.is_finite()), "non-finite feature for {n} players");
-                    assert!(buf.iter().all(|v| (-4.0..=4.0).contains(v)), "unnormalized feature for {n} players");
+                    assert!(
+                        buf.iter().all(|v| v.is_finite()),
+                        "non-finite feature for {n} players"
+                    );
+                    assert!(
+                        buf.iter().all(|v| (-4.0..=4.0).contains(v)),
+                        "unnormalized feature for {n} players"
+                    );
                 }
                 let p = g.active_player().unwrap();
                 let actions = g.legal_actions(p);
@@ -493,10 +561,20 @@ mod tests {
             for (i, _) in actions.iter().enumerate() {
                 let row = &buf[i * ACTION_FEAT_LEN..(i + 1) * ACTION_FEAT_LEN];
                 let type_hot: f32 = row[AF_TYPE..AF_TYPE + AF_NUM_TYPES].iter().sum();
-                assert_eq!(type_hot, 1.0, "every action row names exactly one action type");
-                let seat_hot: f32 = row[AF_TARGET_SEAT..AF_TARGET_SEAT + MAX_PLAYERS].iter().sum();
-                assert_eq!(seat_hot, 1.0, "every action row names exactly one target seat");
-                assert!(row.iter().all(|v| v.is_finite() && (-4.0..=4.0).contains(v)));
+                assert_eq!(
+                    type_hot, 1.0,
+                    "every action row names exactly one action type"
+                );
+                let seat_hot: f32 = row[AF_TARGET_SEAT..AF_TARGET_SEAT + MAX_PLAYERS]
+                    .iter()
+                    .sum();
+                assert_eq!(
+                    seat_hot, 1.0,
+                    "every action row names exactly one target seat"
+                );
+                assert!(row
+                    .iter()
+                    .all(|v| v.is_finite() && (-4.0..=4.0).contains(v)));
             }
             counter = counter.wrapping_mul(6364136223846793005).wrapping_add(1);
             let a = actions[(counter as usize) % actions.len()].clone();
@@ -520,7 +598,12 @@ mod tests {
         g.encode_actions(p, &actions, &mut buf);
         for i in 0..actions.len() {
             let row = &buf[i * ACTION_FEAT_LEN..(i + 1) * ACTION_FEAT_LEN];
-            assert_eq!(row[AF_TARGET_CARDS..AF_TARGET_CARDS + NUM_CARD_CLASSES].iter().sum::<f32>(), 0.0);
+            assert_eq!(
+                row[AF_TARGET_CARDS..AF_TARGET_CARDS + NUM_CARD_CLASSES]
+                    .iter()
+                    .sum::<f32>(),
+                0.0
+            );
             assert!(row[AF_HIDDEN_TARGETS] > 0.0);
         }
     }

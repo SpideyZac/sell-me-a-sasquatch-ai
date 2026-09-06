@@ -4,23 +4,23 @@ Training libraries like Stable-Baselines3 expect a single-agent
 `gymnasium.Env`. Every seat in Sell Me a Sasquatch is symmetric (same
 observation and action shape, same rules), so the standard recipe is: pick
 one seat as "the learner", and play every other seat with an
-`opponent_policy` - by default a uniformly random legal move, but pointed at
+`opponent_policy`, by default a uniformly random legal move, but pointed at
 the learner's own in-training policy this becomes genuine self-play with no
 separate multi-agent training loop.
 
 Two things differ from the obvious implementation:
 
-* **It drives `native.Game` directly** rather than going through
-  `SasquatchAECEnv`. The AEC protocol exists so *external* consumers can
-  take one agent at a time; here we own the whole rollout, and its per-agent
+* It drives `native.Game` directly rather than going through
+  `SasquatchAECEnv`. The AEC protocol exists so external consumers can take
+  one agent at a time; here we own the whole rollout, and its per-agent
   reward/termination bookkeeping is pure overhead on the hot path.
 
-* **Table size is resampled every episode.** The observation is padded and
+* Table size is resampled every episode. The observation is padded and
   ego-centric (see `spaces.py`), so 2- through 6-player games share one
-  observation and action space. Training across all of them yields a single
-  general model instead of one checkpoint per table size - and the variety
-  acts as regularization, since a policy cannot overfit to one table's
-  particular dynamics.
+  observation and action space. Training across all of them yields a
+  single general model instead of one checkpoint per table size, and the
+  variety acts as regularization, since a policy cannot overfit to one
+  table's particular dynamics.
 """
 
 from __future__ import annotations
@@ -34,13 +34,14 @@ from . import _native as native
 from . import spaces as sasquatch_spaces
 from .env import DEFAULT_DECK_PATH, RewardFn, default_reward_fn, load_deck
 
-# `(observation, action_mask, legal_count) -> action index`
-#
-# `legal_count` is redundant with `mask` - the ordinal action space makes
-# every mask a prefix of ones - but it is passed explicitly because the
-# environment already knows it, and recovering it by summing a few hundred
-# bytes is a real cost at hundreds of thousands of micro-steps per second.
 OpponentPolicy = Callable[[dict, np.ndarray, int], int]
+"""`(observation, action_mask, legal_count) -> action index`.
+
+`legal_count` is redundant with `mask` (the ordinal action space makes
+every mask a prefix of ones), but it is passed explicitly because the
+environment already knows it, and recovering it by summing a few hundred
+bytes is a real cost at hundreds of thousands of micro-steps per second.
+"""
 
 
 def random_masked_policy(obs: dict, mask: np.ndarray, legal_count: int) -> int:
@@ -50,11 +51,11 @@ def random_masked_policy(obs: dict, mask: np.ndarray, legal_count: int) -> int:
 
 class OpponentPool:
     """Self-play opponent that mixes the live in-training model with a pool
-    of its own older, frozen snapshots ("fictitious self-play" / a tiny
+    of its own older, frozen snapshots (fictitious self-play, a tiny
     league).
 
-    Always playing an exact, always-current copy of itself - the simplest
-    possible self-play - can cycle, or overfit to beating a mirror rather
+    Always playing an exact, always-current copy of itself, the simplest
+    possible self-play, can cycle, or overfit to beating a mirror rather
     than learning something robust: the policy and its opponent are, after
     all, the same weights at every step. Mixing in older snapshots gives a
     more stable and more diverse curriculum, and is the standard fix.
@@ -68,7 +69,8 @@ class OpponentPool:
     """
 
     def __init__(self, current_prob: float = 0.5, max_snapshots: int = 10, rng: np.random.Generator | None = None):
-        self.model = None  # set externally once the live model exists (chicken-and-egg at construction)
+        """Builds an empty pool; call `add_snapshot` to populate it."""
+        self.model = None  # set externally once the live model exists, chicken-and-egg at construction
         self.snapshots: list = []
         self.current_prob = current_prob
         self.max_snapshots = max_snapshots
@@ -76,7 +78,7 @@ class OpponentPool:
         self._active = None
 
     def add_snapshot(self, model) -> None:
-        """Freezes `model` into the league. Never trained further - only
+        """Freezes `model` into the league. Never trained further, only
         asked for moves. Called from a training callback; see
         `scripts/train.py`'s `SnapshotCallback`.
 
@@ -90,18 +92,20 @@ class OpponentPool:
 
             model = NumpyPointerPolicy.from_model(model, rng=self.rng)
         except (ImportError, TypeError, AttributeError):
-            pass  # not a pointer policy (or torch is absent) - use it as-is
+            pass  # not a pointer policy (or torch is absent), use it as-is
         self.snapshots.append(model)
         if len(self.snapshots) > self.max_snapshots:
             self.snapshots.pop(0)
 
     def new_episode(self) -> None:
+        """Draws this episode's opponent identity: the live model or a random snapshot."""
         if self.snapshots and (self.model is None or self.rng.random() >= self.current_prob):
             self._active = self.snapshots[self.rng.integers(len(self.snapshots))]
         else:
             self._active = self.model
 
     def __call__(self, obs: dict, mask: np.ndarray, legal_count: int) -> int:
+        """Picks an action from the currently drawn opponent."""
         model = self._active if self._active is not None else self.model
         if model is None:
             return random_masked_policy(obs, mask, legal_count)
@@ -119,11 +123,12 @@ class SasquatchSelfPlayEnv(gym.Env):
 
     The hero's seat is redrawn each episode too. The ego-centric encoding
     already makes seats interchangeable to the policy, but a seat's
-    *position relative to the turn leader* is a real difference - the seat
+    position relative to the turn leader is a real difference: the seat
     that offers first sees a different game from the one that offers last.
     """
 
     metadata = {"render_modes": []}
+    """Gymnasium metadata: this env supports no render modes."""
 
     def __init__(
         self,
@@ -134,6 +139,7 @@ class SasquatchSelfPlayEnv(gym.Env):
         reward_fn: Optional[RewardFn] = None,
         max_actions: int | None = None,
     ):
+        """Builds the env; call `reset` before stepping it."""
         super().__init__()
         self.players = (players,) if isinstance(players, int) else tuple(players)
         if not self.players:
@@ -157,13 +163,13 @@ class SasquatchSelfPlayEnv(gym.Env):
         self._personas = np.zeros((sasquatch_spaces.MAX_PLAYERS, sasquatch_spaces.NOISE_LEN), dtype=np.float32)
         self._prev_tokens: Sequence[int] = [0] * self._num_players
         self._mask = np.zeros(self.max_actions, dtype=np.int8)
-        # Mirrors `_mask`. The encoder already returns the legal count, so
-        # nothing on the hot path should be summing 300 int8s to recover it.
+        # mirrors _mask. the encoder already returns the legal count, so
+        # nothing on the hot path should be summing 300 int8s to recover it
         self._legal_count = 0
         self._carried_reward = 0.0
-        # Scratch buffers reused across micro-steps. `observe` copies out of
+        # scratch buffers reused across micro-steps. observe copies out of
         # them before handing anything to a caller, so nothing outlives a
-        # step; this just keeps a ~40 KB allocation off the hot path.
+        # step; this just keeps a ~40 kb allocation off the hot path
         self._scratch = sasquatch_spaces.empty_observation(self.max_actions)
 
     # gymnasium API
@@ -180,7 +186,7 @@ class SasquatchSelfPlayEnv(gym.Env):
 
     @property
     def legal_count(self) -> int:
-        """How many actions are legal right now - the width of the mask's
+        """How many actions are legal right now, the width of the mask's
         leading run of ones."""
         return self._legal_count
 
@@ -189,6 +195,7 @@ class SasquatchSelfPlayEnv(gym.Env):
         return self._mask
 
     def reset(self, *, seed=None, options=None):
+        """Starts a new episode, drawing a fresh table size, hero seat, and personas."""
         super().reset(seed=seed)
         self._num_players = int(self.np_random.choice(self.players))
         self._learner = (
@@ -205,17 +212,19 @@ class SasquatchSelfPlayEnv(gym.Env):
 
         reward = self._play_opponent_turns()
         obs = self._observe(self._learner)
-        # A reward earned before the learner's first action has nowhere to
-        # go in the gymnasium API; it is only ever shaping, and only when an
-        # opponent moved first, so fold it into the first step instead.
+        # a reward earned before the learner's first action has nowhere to
+        # go in the gymnasium api; it is only ever shaping, and only when
+        # an opponent moved first, so fold it into the first step instead
         self._carried_reward = reward
         return obs, {}
 
     def step(self, action: int):
+        """Applies the learner's action, then plays every opponent turn until it is the learner's move again."""
         idx = int(action)
         if not 0 <= idx < self._legal_count:
-            # Masked-out index: a policy bug rather than a rules violation.
-            # §3.4 says mask, don't raise - fail soft onto a legal move.
+            # masked-out index: a policy bug rather than a rules violation.
+            # illegal actions default to masking, not raising, so fail
+            # soft onto a legal move
             idx = 0
         done, winner = self._game.step_index(self._learner, idx)
         reward = self._carried_reward + self._reward(winner if done else None)
@@ -231,6 +240,7 @@ class SasquatchSelfPlayEnv(gym.Env):
         return obs, reward, done, False, info
 
     def render(self):
+        """Unsupported; this env has no render modes."""
         return None
 
     def add_opponent_snapshot(self, path: str) -> None:
@@ -266,6 +276,7 @@ class SasquatchSelfPlayEnv(gym.Env):
         return {"state": state, "actions": actions}
 
     def _reward(self, winner: Optional[int]) -> float:
+        """The learner's reward for the just-applied step."""
         tokens = self._game.point_tokens()
         reward = self.reward_fn(self._prev_tokens, tokens, self._learner, winner)
         self._prev_tokens = tokens
@@ -274,12 +285,13 @@ class SasquatchSelfPlayEnv(gym.Env):
     def _play_opponent_turns(self) -> float:
         """Runs every non-learner micro-turn until it is the learner's move
         again (or the game ends), accumulating the learner's reward across
-        *each* of them.
+        each of them.
 
-        With 3+ players several opponent micro-turns - a whole Thingamabob
-        window, say - can pass before control returns, and under a dense
-        reward any one of them can move the learner's standing (an opponent
-        stealing one of their Point Tokens mid-window, for instance).
+        With three or more players several opponent micro-turns (a whole
+        thingamabob window, say) can pass before control returns, and
+        under a dense reward any one of them can move the learner's
+        standing (an opponent stealing one of their point tokens
+        mid-window, for instance).
         """
         game = self._game
         total = 0.0

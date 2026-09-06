@@ -1,10 +1,9 @@
-//! §3.5 performance target: >100k full-game simulations/sec single-threaded
-//! for random-policy self-play, measured against the confirmed 120-card
-//! deck (`configs/deck.toml`).
+//! Performance target: over 100k full-game simulations per second,
+//! single-threaded, for random-policy self-play, measured against the
+//! confirmed 120-card deck (`configs/deck.toml`).
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use sasquatch_engine::deck::DeckConfig;
-use sasquatch_engine::game::GameState;
+use sasquatch_engine::{deck::DeckConfig, game::GameState};
 
 const CONFIRMED_DECK_TOML: &str = include_str!("../../configs/deck.toml");
 

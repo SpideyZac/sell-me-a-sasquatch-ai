@@ -1,6 +1,6 @@
 """Evaluate a trained model's win rate, per table size.
 
-The interesting number is the win rate *relative to chance*: a 4-player
+The interesting number is the win rate relative to chance: a 4-player
 table gives a random agent 25%, a 6-player table 16.7%, so raw win rates
 across table sizes are not comparable on their own.
 
@@ -30,7 +30,7 @@ def as_opponent(model, rng: np.random.Generator):
     """Frozen copy of `model` in the `(obs, mask, legal_count) -> index` shape.
 
     Prefers the numpy mirror, which is the same arithmetic without torch's
-    per-call overhead - meaningful here because opponents take most of the
+    per-call overhead, meaningful here because opponents take most of the
     moves in an episode.
     """
     try:
@@ -45,9 +45,10 @@ def as_opponent(model, rng: np.random.Generator):
 
 
 def evaluate(model, num_players: int, episodes: int, deck, opponent, seed: int) -> tuple[float, float]:
-    # The action space must match the one the checkpoint was trained
+    """Win rate and episodes/second for `model` at one table size."""
+    # the action space must match the one the checkpoint was trained
     # with, not the (possibly narrower) one this table size needs on its
-    # own - a model trained across every table size has a wider head.
+    # own; a model trained across every table size has a wider head
     env = SasquatchSelfPlayEnv(
         players=num_players,
         deck_config_path=deck,
@@ -69,6 +70,7 @@ def evaluate(model, num_players: int, episodes: int, deck, opponent, seed: int) 
 
 
 def main(argv=None):
+    """Parses arguments and prints win rate versus chance for every configured table size."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("model_path")
     parser.add_argument("--players", type=int, nargs="+", default=[2, 3, 4, 5, 6], choices=range(2, 7))

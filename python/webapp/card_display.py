@@ -1,7 +1,7 @@
-"""Shared card-label helpers for the webapp (Watch/Play and the Live tracker).
+"""Shared card-label helpers for the webapp (watch/play and the live tracker).
 
 Creatures show their tier only ("Tiny Creature") rather than the engine's
-flavor names (see `engine/src/card.rs::creature_flavor_name`) - those are
+flavor names (see `engine/src/card.rs::creature_flavor_name`); those are
 non-mechanical fluff and just noise in this UI.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 
 def display_name(game, card_id: int) -> str:
+    """A card's UI-facing name: tier only for creatures, the real name otherwise."""
     kind = game.card_kind(card_id)
     if kind and kind.startswith("Creature:"):
         return f"{kind.split(':', 1)[1]} Creature"
@@ -16,20 +17,21 @@ def display_name(game, card_id: int) -> str:
 
 
 def card_dict(game, card_id: int) -> dict:
+    """A card's id, display name, and mechanical kind, as a plain dict."""
     return {"id": card_id, "name": display_name(game, card_id), "kind": game.card_kind(card_id)}
 
 
 def human_card_class_label(card_class: str) -> str:
     """Tier-only label for a `sasquatch_spaces.CARD_CLASSES` entry, e.g.
-    `"Creature:Tiny"` -> `"Tiny Creature"`; other kinds keep their real name."""
+    `"Creature:Tiny"` becomes `"Tiny Creature"`; other kinds keep their real name."""
     kind, _, name = card_class.partition(":")
     return f"{name} Creature" if kind == "Creature" else name
 
 
 def describe_action(game, action) -> str:
     """Full-information action label (assumes every referenced card's kind
-    is meaningful to show) - used by Watch/Play, where the engine deals a
-    real (if simulated) deck. The Live tracker uses its own pin-aware
+    is meaningful to show), used by watch/play, where the engine deals a
+    real (if simulated) deck. The live tracker uses its own pin-aware
     variant instead (`live_game.LiveSession._live_action_label`), since most
     of a live game's cards start out as meaningless placeholders."""
     d = action.to_dict()

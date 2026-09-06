@@ -6,11 +6,11 @@ members = ["engine", "bindings"]
 version = "0.1.0"
 edition = "2021"
 
-# The native extension is the RL environment's inner loop - every micro-step
-# of every self-play episode crosses it. Whole-program optimization here is
-# worth the slower builds.
+# the native extension is the rl environment's inner loop, every micro-step
+# of every self-play episode crosses it. whole-program optimization here is
+# worth the slower builds
 [profile.release]
-lto = "fat"
+lto = true
 codegen-units = 1
-# No `panic = "abort"`: PyO3 turns a Rust panic into a Python exception via
-# `catch_unwind`, which aborting would take away.
+# no panic = "abort": pyo3 turns a rust panic into a python exception via
+# catch_unwind, which aborting would take away

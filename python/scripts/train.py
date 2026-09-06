@@ -2,9 +2,9 @@
 
 A single `MaskablePPO` policy plays every seat at every table size. The
 observation is padded and ego-centric (`sell_me_a_sasquatch/spaces.py`), so
-2- through 6-player games - including the materially different 2-player
-variant (§2.7) - share one observation and action space, and one checkpoint
-plays all of them.
+2- through 6-player games, including the materially different two-player
+variant, share one observation and action space, and one checkpoint plays
+all of them.
 
 Opponents come from `OpponentPool`: a rotating league of the policy's own
 frozen snapshots, refreshed by `SnapshotCallback`, so the learner faces a
@@ -17,16 +17,16 @@ Usage:
 
 Parallelism
 -----------
-Environments run in worker *processes* (`SubprocVecEnv`), which is what
-makes rollout collection scale with cores - the engine releases no GIL of
-its own, so threads would not help. That means workers cannot call back into
-the live model, so each worker keeps its own opponent league on disk-loaded
-snapshots: `SnapshotCallback` saves the model and tells every worker to load
-it. The opponents are therefore up to `--snapshot-every` timesteps stale,
-which is exactly the "play against slightly older versions of yourself"
-regime self-play wants anyway. `--vec dummy` keeps everything in one process
-and uses the live model directly, which is the right choice for debugging
-and for very small runs.
+Environments run in worker processes (`SubprocVecEnv`), which is what makes
+rollout collection scale with cores, since the engine releases no GIL of
+its own, so threads would not help. That means workers cannot call back
+into the live model, so each worker keeps its own opponent league on
+disk-loaded snapshots: `SnapshotCallback` saves the model and tells every
+worker to load it. The opponents are therefore up to `--snapshot-every`
+timesteps stale, which is exactly the "play against slightly older
+versions of yourself" regime self-play wants anyway. `--vec dummy` keeps
+everything in one process and uses the live model directly, which is the
+right choice for debugging and for very small runs.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ import glob
 import os
 import sys
 
-# `scripts/` is run directly, so make the package importable without an install.
+# scripts/ is run directly, so make the package importable without an install
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sb3_contrib import MaskablePPO  # noqa: E402
@@ -59,8 +59,8 @@ def make_env(players, deck_path, use_pool, current_prob, max_snapshots, seed):
     pickle it for `spawn`-based workers on Windows/macOS."""
     import torch as th
 
-    # Each worker is one of many processes already; letting every one of them
-    # fan out over all cores just makes them fight each other.
+    # each worker is one of many processes already; letting every one of
+    # them fan out over all cores just makes them fight each other
     th.set_num_threads(1)
 
     opponent = OpponentPool(current_prob=current_prob, max_snapshots=max_snapshots) if use_pool else random_masked_policy
@@ -88,9 +88,11 @@ class SnapshotCallback(BaseCallback):
         self._count = 0
 
     def _init_callback(self) -> None:
+        """Ensures the snapshot directory exists before training starts."""
         os.makedirs(self.save_dir, exist_ok=True)
 
     def _on_step(self) -> bool:
+        """Saves a snapshot and publishes it to every worker if enough steps have passed."""
         if self.num_timesteps - self._last_snapshot_at < self.every_n_steps:
             return True
         self._last_snapshot_at = self.num_timesteps
@@ -107,6 +109,7 @@ class SnapshotCallback(BaseCallback):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Builds this script's command-line argument parser."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--players",
@@ -155,11 +158,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
+    """Parses arguments and runs one training run."""
     args = build_parser().parse_args(argv)
     players = tuple(sorted(set(args.players)))
     use_pool = args.opponent == "self"
-    # A live-model opponent needs the model in this process, which only the
-    # single-process vec env can offer.
+    # a live-model opponent needs the model in this process, which only
+    # the single-process vec env can offer
     in_process = args.vec == "dummy"
 
     env_fns = [
@@ -199,13 +203,14 @@ def main(argv=None):
         if in_process:
             live_pool = vec_env.envs[0].unwrapped.opponent_policy
             live_pool.model = model
-            # Every in-process env shares one pool, so the league (and the
-            # live model) stay consistent across them.
+            # every in-process env shares one pool, so the league (and the
+            # live model) stay consistent across them
             for env in vec_env.envs:
                 env.unwrapped.opponent_policy = live_pool
         elif args.resume:
-            # A resumed run would otherwise start against a random baseline;
-            # hand the workers back whatever league the previous run left.
+            # a resumed run would otherwise start against a random
+            # baseline; hand the workers back whatever league the
+            # previous run left
             existing = sorted(glob.glob(os.path.join(snapshot_dir, "snapshot_*.zip")), key=os.path.getmtime)
             for path in existing[-args.max_snapshots :]:
                 vec_env.env_method("add_opponent_snapshot", path)
@@ -218,7 +223,7 @@ def main(argv=None):
         f"action space width {vec_env.action_space.n}"
     )
     # reset_num_timesteps=False so a resumed run keeps counting from the
-    # checkpoint's own total rather than restarting at 0.
+    # checkpoint's own total rather than restarting at 0
     model.learn(
         total_timesteps=args.timesteps,
         callback=callback,

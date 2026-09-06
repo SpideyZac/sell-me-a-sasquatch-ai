@@ -24,6 +24,8 @@ DECK_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..",
 
 
 def make_model(players=(2, 4, 6), **kwargs):
+    """Builds a small `MaskablePointerPolicy` model for fast tests."""
+
     def _factory():
         env = SasquatchSelfPlayEnv(players=players, deck_config_path=DECK_PATH, opponent_policy=random_masked_policy)
         return ActionMasker(env, lambda e: e.action_masks())
@@ -53,7 +55,7 @@ def test_pointer_policy_trains_end_to_end():
 
 def test_numpy_policy_matches_torch():
     """The numpy mirror exists purely for speed, so it has to be the same
-    function - not merely a similar one."""
+    function, not merely a similar one."""
     model, vec = make_model()
     env = vec.envs[0].env
     obs, _ = env.reset(seed=3)
@@ -69,6 +71,7 @@ def test_numpy_policy_matches_torch():
 
 
 def test_numpy_policy_only_ever_returns_a_legal_action():
+    """The numpy policy never picks an index outside the current legal count."""
     model, vec = make_model()
     env = vec.envs[0].env
     obs, _ = env.reset(seed=5)
@@ -84,7 +87,7 @@ def test_numpy_policy_only_ever_returns_a_legal_action():
 
 
 def test_saved_model_round_trips(tmp_path):
-    """`action_embed_dim` is a constructor argument of ours, not SB3's - if
+    """`action_embed_dim` is a constructor argument of ours, not SB3's; if
     it is not carried in the saved constructor parameters, a reloaded model
     silently rebuilds the head at the wrong width."""
     model, vec = make_model()

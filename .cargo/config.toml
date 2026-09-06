@@ -1,11 +1,13 @@
-# Lets `cargo build`/`cargo check` (and, by extension, rust-analyzer, which
-# shells out to cargo) find a Python interpreter for the `bindings/` crate's
-# PyO3 build script, without needing the `python/.venv` virtualenv
-# "activated" in whatever shell or editor process invoked cargo.
+# lets cargo build/check (and, by extension, rust-analyzer, which shells
+# out to cargo) find a python interpreter for the bindings crate's pyo3
+# build script, without needing the python/.venv virtualenv activated in
+# whatever shell or editor process invoked cargo
 #
-# `relative = true` resolves the path relative to this file's directory
-# (the repo root), so this works regardless of who clones the repo where —
-# as long as `python/.venv` exists (see README's "Building" section: `cd
-# python && uv venv && uv run maturin develop`).
+# relative = true resolves the path relative to this file's directory (the
+# repo root), so this works regardless of who clones the repo where, as
+# long as python/.venv exists (see the readme's install section)
 [env]
 VIRTUAL_ENV = { value = "python/.venv", relative = true }
+
+[build]
+rustflags = ["-Ctarget-cpu=native"]

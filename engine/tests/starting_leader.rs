@@ -1,11 +1,13 @@
-//! Letting a human-configured game pin who goes first / who buys first
-//! (§2.3 step 1; §2.7 for 2-player mode) instead of always picking randomly.
+//! Letting a human-configured game pin who goes first, or who buys first
+//! (including two-player mode), instead of always picking randomly.
 
 mod common;
 
 use common::TEST_DECK_TOML;
-use sasquatch_engine::deck::DeckConfig;
-use sasquatch_engine::game::{GameState, SetupError};
+use sasquatch_engine::{
+    deck::DeckConfig,
+    game::{GameState, SetupError},
+};
 
 fn deck() -> DeckConfig {
     DeckConfig::from_toml_str(TEST_DECK_TOML).unwrap()
@@ -15,7 +17,8 @@ fn deck() -> DeckConfig {
 fn starting_leader_pins_the_first_turn_leader() {
     for num_players in 2..=6 {
         for leader in 0..num_players {
-            let game = GameState::new_with_starting_leader(num_players, deck(), 1, Some(leader)).unwrap();
+            let game =
+                GameState::new_with_starting_leader(num_players, deck(), 1, Some(leader)).unwrap();
             assert_eq!(game.turn_leader(), leader);
         }
     }
@@ -31,6 +34,14 @@ fn starting_leader_none_keeps_the_usual_random_pick() {
 
 #[test]
 fn out_of_range_starting_leader_is_rejected() {
-    let Err(err) = GameState::new_with_starting_leader(4, deck(), 1, Some(4)) else { panic!("expected an error") };
-    assert_eq!(err, SetupError::InvalidStartingLeader { given: 4, num_players: 4 });
+    let Err(err) = GameState::new_with_starting_leader(4, deck(), 1, Some(4)) else {
+        panic!("expected an error")
+    };
+    assert_eq!(
+        err,
+        SetupError::InvalidStartingLeader {
+            given: 4,
+            num_players: 4
+        }
+    );
 }

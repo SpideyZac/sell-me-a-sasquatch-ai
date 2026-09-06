@@ -3,19 +3,20 @@
 - Watch: a game of loaded AI models (or random policies) playing each other,
   stepped one micro-turn at a time.
 - Play: you take one seat, AI models (or random) play the rest.
-- Live (the "Advisor"): for an actual live (physical) game. It's still the
-  real Rust rules engine underneath - so collections, point totals, discard/
-  draw piles, set trade-ins, and turn order are all handled automatically
-  and correctly - but nothing is randomly dealt. You tell it what's really
-  on the table exactly when it becomes visible (your starting hand, each
-  card as it's revealed, what a resolved deal's still-hidden cards turn out
-  to be), via `Game.pin_kind` (see `engine/src/game.rs`); everything else
-  the engine can compute on its own without you tracking a thing. See
-  `live_game.py` for the state machine that drives this.
+- Live (the "advisor"): for an actual live (physical) game. It's still the
+  real Rust rules engine underneath, so collections, point totals, discard
+  and draw piles, set trade-ins, and turn order are all handled
+  automatically and correctly, but nothing is randomly dealt. You tell it
+  what's really on the table exactly when it becomes visible (your
+  starting hand, each card as it's revealed, what a resolved deal's
+  still-hidden cards turn out to be), via `Game.pin_kind` (see
+  `engine/src/game.rs`); everything else the engine can compute on its own
+  without you tracking a thing. See `live_game.py` for the state machine
+  that drives this.
 
 Run with:
     cd python
-    uv pip install -e ".[web,train]"   # train extra optional - only needed to load real models
+    uv pip install -e ".[web,train]"   # train extra optional, only needed to load real models
     uv run python webapp/app.py
 Then open http://127.0.0.1:5000/
 """
@@ -37,16 +38,21 @@ from models import get_policy, list_available_models
 
 app = Flask(__name__)
 GAMES: dict[str, "GameSession"] = {}
+"""Live watch/play sessions, keyed by their generated id."""
 LIVE_GAMES: dict[str, LiveSession] = {}
+"""Live tracker sessions, keyed by their generated id."""
 
 
-# game sessions (Watch / Play - real `GameState`, AI/random-controlled seats)
+# game sessions (watch/play, real GameState, AI/random-controlled seats)
 class GameSession:
+    """One watch or play game in progress, with a policy per non-human seat."""
+
     def __init__(self, game, num_players: int, mode: str, human_seat: "int | None", seat_specs: list[str], seat_policies: list):
+        """Wraps an already-constructed `native.Game` with UI-facing session state."""
         self.game = game
         self.num_players = num_players
-        # Width for random-policy seats; model seats use their own (see
-        # `models.observation_width`).
+        # width for random-policy seats; model seats use their own, see
+        # models.observation_width
         self.max_actions = game.max_legal_actions()
         self.mode = mode  # "watch" | "play"
         self.human_seat = human_seat
@@ -56,6 +62,7 @@ class GameSession:
 
 
 def _step_seat(session: GameSession, player: int) -> None:
+    """Applies one policy-chosen action for `player` and logs it."""
     game = session.game
     legal = game.legal_actions(player)
     if not legal:
@@ -74,6 +81,7 @@ def _step_seat(session: GameSession, player: int) -> None:
 
 
 def _auto_resolve_ai_turns(session: GameSession, max_steps: int = 1000) -> None:
+    """Steps every non-human seat until it's the human's turn, the game ends, or `max_steps` is hit."""
     game = session.game
     for _ in range(max_steps):
         if game.is_game_over():
@@ -85,6 +93,7 @@ def _auto_resolve_ai_turns(session: GameSession, max_steps: int = 1000) -> None:
 
 
 def spectator_view(session: GameSession) -> dict:
+    """Full-information JSON view of a watch-mode game, for every seat at once."""
     game = session.game
     n = session.num_players
     hands, collections, tokens = [], [], []
@@ -115,6 +124,7 @@ def spectator_view(session: GameSession) -> dict:
 
 
 def human_view(session: GameSession) -> dict:
+    """Filtered JSON view of a play-mode game, from the human seat's perspective."""
     game = session.game
     seat = session.human_seat
     obs = game.observation(seat)
@@ -142,10 +152,12 @@ def human_view(session: GameSession) -> dict:
 
 
 def _view_for(session: GameSession) -> dict:
+    """The right JSON view for a session's mode."""
     return spectator_view(session) if session.mode == "watch" else human_view(session)
 
 
 def _get_session(game_id: str) -> GameSession:
+    """Looks up a watch/play session, aborting with 404 if it doesn't exist."""
     session = GAMES.get(game_id)
     if session is None:
         abort(404, "unknown game_id")
@@ -153,6 +165,7 @@ def _get_session(game_id: str) -> GameSession:
 
 
 def _get_live_session(live_id: str) -> LiveSession:
+    """Looks up a live tracker session, aborting with 404 if it doesn't exist."""
     session = LIVE_GAMES.get(live_id)
     if session is None:
         abort(404, "unknown live_id")
@@ -162,18 +175,21 @@ def _get_live_session(live_id: str) -> LiveSession:
 # routes: pages
 @app.route("/")
 def index():
+    """The single-page app shell."""
     return render_template("index.html")
 
 
 # routes: shared JSON API
 @app.route("/api/models")
 def api_models():
+    """Every checkpoint path available to load."""
     return jsonify({"models": list_available_models()})
 
 
-# routes: Watch / Play game sessions
+# routes: watch/play game sessions
 @app.route("/api/games", methods=["POST"])
 def api_new_game():
+    """Starts a new watch or play game."""
     body = request.get_json(force=True)
     num_players = int(body["num_players"])
     if not (2 <= num_players <= 6):
@@ -218,11 +234,13 @@ def api_new_game():
 
 @app.route("/api/games/<game_id>")
 def api_get_game(game_id):
+    """The current state of one watch/play game."""
     return jsonify({"state": _view_for(_get_session(game_id))})
 
 
 @app.route("/api/games/<game_id>/advance", methods=["POST"])
 def api_advance(game_id):
+    """Steps one watch-mode game forward by a single micro-turn."""
     session = _get_session(game_id)
     if session.mode != "watch":
         return jsonify({"error": "advance is only for watch-mode games"}), 400
@@ -233,6 +251,7 @@ def api_advance(game_id):
 
 @app.route("/api/games/<game_id>/act", methods=["POST"])
 def api_act(game_id):
+    """Applies the human's chosen action in a play-mode game, then resolves any following AI turns."""
     session = _get_session(game_id)
     if session.mode != "play":
         return jsonify({"error": "act is only for play-mode games"}), 400
@@ -260,13 +279,15 @@ def api_act(game_id):
 
 @app.route("/api/games/<game_id>", methods=["DELETE"])
 def api_delete_game(game_id):
+    """Discards a watch/play game session."""
     GAMES.pop(game_id, None)
     return jsonify({"ok": True})
 
 
-# routes: Live tracker (the "Advisor" tab) - see live_game.py
+# routes: live tracker (the "advisor" tab), see live_game.py
 @app.route("/api/live", methods=["POST"])
 def api_new_live_game():
+    """Starts a new live tracker session for a physical game."""
     body = request.get_json(force=True)
     num_players = int(body["num_players"])
     if not (2 <= num_players <= 6):
@@ -295,11 +316,13 @@ def api_new_live_game():
 
 @app.route("/api/live/<live_id>")
 def api_get_live_game(live_id):
+    """The current state of one live tracker session."""
     return jsonify({"state": _get_live_session(live_id).state()})
 
 
 @app.route("/api/live/<live_id>/respond", methods=["POST"])
 def api_live_respond(live_id):
+    """Feeds one piece of user-supplied information into a live tracker session."""
     session = _get_live_session(live_id)
     body = request.get_json(force=True)
     try:
@@ -311,6 +334,7 @@ def api_live_respond(live_id):
 
 @app.route("/api/live/<live_id>", methods=["DELETE"])
 def api_delete_live_game(live_id):
+    """Discards a live tracker session."""
     LIVE_GAMES.pop(live_id, None)
     return jsonify({"ok": True})
 

@@ -1,5 +1,5 @@
 """Loading/caching trained models (or the "random" policy), shared by the
-Watch/Play game sessions and the Live tracker's advisor scoring."""
+watch/play game sessions and the live tracker's advisor scoring."""
 
 from __future__ import annotations
 
@@ -10,10 +10,13 @@ from sell_me_a_sasquatch import spaces as sasquatch_spaces
 from sell_me_a_sasquatch.selfplay_env import random_masked_policy
 
 MODELS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "models"))
+"""Directory model checkpoints are loaded from by relative name."""
 _MODEL_CACHE: dict[str, object] = {}
+"""Loaded models keyed by their spec string."""
 
 
 def _resolve_model_path(spec: str) -> str:
+    """Resolves a model spec to a path under `MODELS_DIR`, or leaves it as-is if not found there."""
     candidate = os.path.join(MODELS_DIR, spec)
     return candidate if os.path.exists(candidate) else spec
 
@@ -36,8 +39,8 @@ def _check_observation_format(spec: str, model) -> None:
     """Rejects checkpoints trained against a different observation layout.
 
     Without this the mismatch only surfaces mid-game, as a tensor-shape
-    error from deep inside the policy - which reads like a crash rather than
-    what it is: an old checkpoint that needs retraining."""
+    error from deep inside the policy, which reads like a crash rather
+    than what it is: an old checkpoint that needs retraining."""
     space = getattr(model, "observation_space", None)
     state = getattr(space, "spaces", {}).get("state") if space is not None else None
     if state is None or state.shape != (sasquatch_spaces.OBS_LEN,):
@@ -53,7 +56,7 @@ def observation_width(model) -> int | None:
     the random policy.
 
     A checkpoint trained across every table size has a wider head than any
-    single table needs, so its observations must be built at *its* width,
+    single table needs, so its observations must be built at its width,
     not the current game's."""
     return None if model is None else int(model.action_space.n)
 
@@ -77,6 +80,7 @@ def get_policy(spec: str):
 
 
 def list_available_models() -> list[str]:
+    """Every checkpoint path under `MODELS_DIR`, relative to it."""
     if not os.path.isdir(MODELS_DIR):
         return []
     paths = glob.glob(os.path.join(MODELS_DIR, "**", "*.zip"), recursive=True)
