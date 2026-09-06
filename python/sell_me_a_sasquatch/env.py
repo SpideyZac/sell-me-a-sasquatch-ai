@@ -169,9 +169,8 @@ class SasquatchAECEnv(AECEnv):  # pylint: disable=abstract-method
         rng = np.random.default_rng(seed)
         if seed is None:
             seed = int(rng.integers(0, 2**63 - 1))
-        self._game = native.Game(
-            self.num_players, self.deck, int(seed)
-        )  # pylint: disable=c-extension-no-member
+        # pylint: disable=c-extension-no-member
+        self._game = native.Game(self.num_players, self.deck, int(seed))
 
         self.agents = self.possible_agents[:]
         self.rewards = {a: 0.0 for a in self.agents}

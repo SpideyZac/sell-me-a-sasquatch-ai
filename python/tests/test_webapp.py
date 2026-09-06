@@ -54,6 +54,7 @@ def _load_app_module():
 
 @pytest.fixture()
 def client():
+    """Flask test client fixture, with a fresh app and cleared GAMES dict."""
     module = _load_app_module()
     module.app.testing = True
     module.GAMES.clear()
@@ -61,14 +62,19 @@ def client():
         yield c
 
 
-def test_index_page_loads(client):
+def test_index_page_loads(client):  # pylint: disable=redefined-outer-name
+    """Smoke test that the index page loads and contains the expected title."""
     resp = client.get("/")
     assert resp.status_code == 200
     assert b"Sell Me a Sasquatch" in resp.data
 
 
 @pytest.mark.parametrize("num_players", [2, 3, 4, 5, 6])
-def test_watch_mode_full_game_via_random_policies(client, num_players):
+def test_watch_mode_full_game_via_random_policies(
+    client, num_players
+):  # pylint: disable=redefined-outer-name
+    """Smoke test that a watch-mode game can be created and driven to completion
+    using only the random policy, and that the final state is consistent."""
     resp = client.post(
         "/api/games",
         json={
@@ -91,7 +97,11 @@ def test_watch_mode_full_game_via_random_policies(client, num_players):
     assert len(state["hands"]) == num_players  # type: ignore
 
 
-def test_play_mode_full_game_via_random_policies(client):
+def test_play_mode_full_game_via_random_policies(
+    client,
+):  # pylint: disable=redefined-outer-name
+    """Smoke test that a play-mode game can be created and driven to completion
+    using only the random policy, and that the final state is consistent."""
     resp = client.post(
         "/api/games",
         json={
@@ -122,7 +132,11 @@ def test_play_mode_full_game_via_random_policies(client):
     assert 0 <= state["winner"] < 4
 
 
-def test_play_mode_rejects_out_of_range_action(client):
+def test_play_mode_rejects_out_of_range_action(
+    client,
+):  # pylint: disable=redefined-outer-name
+    """Regression test: play-mode game should reject an action index that is
+    out of range for the current prompt's options, returning a 400 error."""
     resp = client.post(
         "/api/games",
         json={
@@ -139,11 +153,15 @@ def test_play_mode_rejects_out_of_range_action(client):
 
 
 def _pick_kind(supply: dict) -> str:
+    """Returns a uniformly random kind from the supply dict, which maps
+    kind string to remaining count. Raises if no kinds are available."""
     available = [c for c in ALL_CLASSES if supply.get(c, 0) > 0]
     return random.choice(available)
 
 
-def _play_live_game_randomly(client, live_id, max_steps=8000):
+def _play_live_game_randomly(
+    client, live_id, max_steps=8000
+):  # pylint: disable=redefined-outer-name
     """Drives a full live-tracker game by answering every prompt with a
     uniformly random (but supply-respecting) choice, asserting the flow
     never errors and eventually reaches game_over."""
@@ -178,7 +196,11 @@ def _play_live_game_randomly(client, live_id, max_steps=8000):
 
 
 @pytest.mark.parametrize("num_players", [2, 3, 4, 5, 6])
-def test_live_game_full_playthrough(client, num_players):
+def test_live_game_full_playthrough(
+    client, num_players
+):  # pylint: disable=redefined-outer-name
+    """Smoke test that a live-tracker game can be created and driven to completion
+    using only the random policy, and that the final state is consistent."""
     resp = client.post(
         "/api/live",
         json={
@@ -198,7 +220,12 @@ def test_live_game_full_playthrough(client, num_players):
         assert card["name"] is not None
 
 
-def test_live_game_starts_with_pin_hand_prompt(client):
+def test_live_game_starts_with_pin_hand_prompt(
+    client,
+):  # pylint: disable=redefined-outer-name
+    """Regression test: the first prompt of a live-tracker game should be
+    a pin_hand prompt, not a choose_action prompt (which would be the case if
+    the game were already in the middle of a turn)."""
     resp = client.post(
         "/api/live",
         json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"},
@@ -209,7 +236,9 @@ def test_live_game_starts_with_pin_hand_prompt(client):
     assert state["prompt"]["count"] == 5
 
 
-def test_live_game_pinned_hand_names_match_what_you_entered(client):
+def test_live_game_pinned_hand_names_match_what_you_entered(
+    client,
+):  # pylint: disable=redefined-outer-name
     """Regression test: `pin_kind` overwrites a card's kind, but each card
     also carries a separately-set flavor `name` from deck-shuffle time (see
     `deck.rs`); a nasty or thingamabob pinned to a different kind must not
@@ -242,7 +271,13 @@ def test_live_game_pinned_hand_names_match_what_you_entered(client):
     assert [c["name"] for c in state["hand"]] == expected_names
 
 
-def test_live_game_opponent_turns_hide_unrevealed_kinds(client):
+def test_live_game_opponent_turns_hide_unrevealed_kinds(
+    client,
+):  # pylint: disable=redefined-outer-name
+    """Regression test: when it's an opponent's turn, the prompt options
+    must never leak a real card name before it's actually revealed, even if
+    the turn leader is you (the human) and the opponent's unknown combo is
+    otherwise fully known to the server."""
     resp = client.post(
         "/api/live",
         json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"},
@@ -263,7 +298,11 @@ def test_live_game_opponent_turns_hide_unrevealed_kinds(client):
         assert not any("score" in o for o in prompt["options"])
 
 
-def test_live_game_advisor_scoring_only_on_your_own_turn(client):
+def test_live_game_advisor_scoring_only_on_your_own_turn(
+    client,
+):  # pylint: disable=redefined-outer-name
+    """Regression test: the advisor model should only score options on your
+    own turn, not on an opponent's turn (even if the turn leader is you)."""
     resp = client.post(
         "/api/live",
         json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"},
@@ -308,7 +347,11 @@ def test_live_game_advisor_scoring_only_on_your_own_turn(client):
     assert saw_opponent_turn, "should also see at least one opponent's deal-offer turn"
 
 
-def test_live_game_rejects_wrong_prompt_payload(client):
+def test_live_game_rejects_wrong_prompt_payload(
+    client,
+):  # pylint: disable=redefined-outer-name
+    """Regression test: if the current prompt is pin_hand,
+    a choose_action payload should be rejected with a 400 error, and vice versa."""
     resp = client.post(
         "/api/live",
         json={"num_players": 4, "human_seat": 0, "seed": 5, "advisor_model": "random"},
@@ -320,12 +363,20 @@ def test_live_game_rejects_wrong_prompt_payload(client):
     assert "error" in bad.get_json()
 
 
-def test_live_game_rejects_bad_num_players(client):
+def test_live_game_rejects_bad_num_players(
+    client,
+):  # pylint: disable=redefined-outer-name
+    """Regression test: live-tracker game should reject a
+    request with an invalid number of players, returning a 400 error."""
     resp = client.post("/api/live", json={"num_players": 1, "human_seat": 0, "seed": 1})
     assert resp.status_code == 400
 
 
-def test_creature_cards_display_tier_only_name(client):
+def test_creature_cards_display_tier_only_name(
+    client,
+):  # pylint: disable=redefined-outer-name
+    """Regression test: creature cards should display only their tier in the name,
+    not their full kind (e.g. "Giant Creature" instead of "Creature:Giant")."""
     resp = client.post(
         "/api/games",
         json={

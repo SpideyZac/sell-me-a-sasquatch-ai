@@ -59,9 +59,8 @@ class LiveSession:
         first_player: int | None = None,
     ):
         """Starts a new live session with every card unpinned."""
-        self.game = native.Game(
-            num_players, deck_path, seed, first_player
-        )  # pylint: disable=c-extension-no-member
+        # pylint: disable=c-extension-no-member
+        self.game = native.Game(num_players, deck_path, seed, first_player)
         self.num_players = num_players
         self.human_seat = human_seat
         self.advisor_model_spec = advisor_model_spec
@@ -310,9 +309,8 @@ class LiveSession:
     def _apply_buyer_peek(self, seat: int, target_seller: int) -> bool:
         """Applies a buyer peek and defers to a reveal prompt unless
         the peeked card is already pinned."""
-        action = native.Action.buyer_peek(
-            target_seller
-        )  # pylint: disable=c-extension-no-member
+        # pylint: disable=c-extension-no-member
+        action = native.Action.buyer_peek(target_seller)
         who = "You" if seat == self.human_seat else f"player_{seat}"
         self.log.append(f"{who}: peeked into player_{target_seller}'s deal")
         result = self.game.step(seat, action)
@@ -386,9 +384,8 @@ class LiveSession:
         self._pin(pr["card"], kind)
         self.pending_reveal = None
         if pr["reveal_type"] == "opponent_deal_reveal":
-            self._apply(
-                pr["seat"], native.Action.reveal_card(pr["card"])
-            )  # pylint: disable=c-extension-no-member
+            # pylint: disable=c-extension-no-member
+            self._apply(pr["seat"], native.Action.reveal_card(pr["card"]))
         elif pr["reveal_type"] == "spectro":
             self._apply(pr["seat"], pr["action"])
         elif pr["reveal_type"] == "buyer_peek_followup":

@@ -36,17 +36,17 @@ from gymnasium import spaces  # type: ignore
 from . import _native as native  # type: ignore
 
 # observation layout, straight from the Rust encoder
-OBS_LEN: int = native.OBS_LEN
+OBS_LEN: int = native.OBS_LEN  # pylint: disable=c-extension-no-member
 """Total width of one observation state vector."""
-ACTION_FEAT_LEN: int = native.ACTION_FEAT_LEN
+ACTION_FEAT_LEN: int = native.ACTION_FEAT_LEN  # pylint: disable=c-extension-no-member
 """Width of one action's feature row."""
-NOISE_OFFSET: int = native.NOISE_OFFSET
+NOISE_OFFSET: int = native.NOISE_OFFSET  # pylint: disable=c-extension-no-member
 """Offset of the trailing per-episode persona noise block within the state vector."""
-NOISE_LEN: int = native.NOISE_LEN
+NOISE_LEN: int = native.NOISE_LEN  # pylint: disable=c-extension-no-member
 """Width of the persona noise block."""
-MAX_PLAYERS: int = native.MAX_PLAYERS
+MAX_PLAYERS: int = native.MAX_PLAYERS  # pylint: disable=c-extension-no-member
 """Largest supported table size."""
-MAX_DEALS: int = native.MAX_DEALS
+MAX_DEALS: int = native.MAX_DEALS  # pylint: disable=c-extension-no-member
 """Largest number of simultaneous active deals padded for."""
 MIN_PLAYERS: int = 2
 """Smallest supported table size."""
@@ -54,6 +54,7 @@ MIN_PLAYERS: int = 2
 ALL_PLAYER_COUNTS: tuple[int, ...] = tuple(range(MIN_PLAYERS, MAX_PLAYERS + 1))
 """Every supported table size."""
 
+# pylint: disable=c-extension-no-member
 CARD_CLASSES: list[str] = list(native.CARD_CLASS_NAMES)
 """Stable card class names, in encoder order."""
 

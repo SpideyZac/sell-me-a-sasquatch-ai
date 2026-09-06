@@ -4,6 +4,8 @@ These need the optional `[train]` extra (torch + sb3-contrib), so they skip
 cleanly when it is not installed.
 """
 
+# pylint: disable=C0413
+
 import os
 
 import numpy as np  # type: ignore
@@ -78,7 +80,8 @@ def test_numpy_policy_matches_torch():
         latent_pi, _ = model.policy.mlp_extractor(
             model.policy.extract_features(tensor_obs)
         )
-        torch_logits = model.policy._action_logits(latent_pi, tensor_obs["actions"])[  # type: ignore
+        # pylint: disable=protected-access
+        torch_logits = model.policy._action_logits(latent_pi, tensor_obs["actions"])[  # type: ignore  # pylint: disable=line-too-long
             0
         ].numpy()
 

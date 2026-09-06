@@ -17,9 +17,8 @@ def _exact_probabilities(model, obs: dict, mask: np.ndarray, legal: np.ndarray):
         with th.no_grad():
             distribution = model.policy.get_distribution(tensor_obs, action_masks=mask)
             probs = distribution.distribution.probs[0].cpu().numpy()
-    except (
-        Exception
-    ):  # pylint: disable=broad-except  # noqa: BLE001 - any policy that cannot, falls back to sampling
+    # pylint: disable=broad-except  # noqa: BLE001 - any policy that cannot, falls back to sampling
+    except Exception:
         return None
     return sorted(((int(i), float(probs[i])) for i in legal), key=lambda kv: -kv[1])
 

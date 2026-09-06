@@ -273,12 +273,11 @@ def api_new_game():
     )
 
     try:
-        game = native.Game(
+        game = native.Game(  # pylint: disable=c-extension-no-member
             num_players, deck, seed, first_player
-        )  # pylint: disable=c-extension-no-member
-    except (
-        Exception
-    ) as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001 - surface engine setup errors to the UI as-is
+        )
+    # pylint: disable=broad-exception-caught  # noqa: BLE001 - surface engine setup errors to the UI as-is
+    except Exception as e:
         return jsonify({"error": str(e)}), 400
 
     seat_policies = []
@@ -289,8 +288,8 @@ def api_new_game():
             try:
                 seat_policies.append(get_policy(seat_specs[i]))
             except (
-                Exception
-            ) as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001
+                Exception  # pylint: disable=broad-exception-caught  # noqa: BLE001
+            ) as e:
                 return (
                     jsonify({"error": f"failed to load model '{seat_specs[i]}': {e}"}),
                     400,
@@ -396,9 +395,8 @@ def api_new_live_game():
         )
     except LiveGameError as e:
         return jsonify({"error": str(e)}), 400
-    except (
-        Exception
-    ) as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001 - surface engine/model setup errors to the UI as-is
+    # pylint: disable=broad-exception-caught  # noqa: BLE001 - surface engine setup errors to the UI as-is
+    except Exception as e:
         return jsonify({"error": str(e)}), 400
 
     _purge_expired()
@@ -435,4 +433,4 @@ def api_delete_live_game(live_id):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, host="0.0.0.0")

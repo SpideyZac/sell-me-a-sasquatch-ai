@@ -17,6 +17,7 @@ DECK_PATH = os.path.normpath(
 
 
 def make_env(**kwargs):
+    """Builds a small `SasquatchSelfPlayEnv` for fast tests."""
     kwargs.setdefault("deck_config_path", DECK_PATH)
     kwargs.setdefault("opponent_policy", random_masked_policy)
     return SasquatchSelfPlayEnv(**kwargs)
@@ -24,6 +25,7 @@ def make_env(**kwargs):
 
 @pytest.mark.parametrize("players", [2, 3, 4, 5, 6])
 def test_random_vs_random_episode_runs_to_completion(players):
+    """A single episode of random play should terminate cleanly."""
     env = make_env(players=players)
     obs, info = env.reset(seed=1)
     assert env.observation_space.contains(obs)
@@ -61,30 +63,46 @@ def test_one_env_plays_every_table_size():
 
 
 def test_action_space_width_covers_every_table_size():
+    """The single general model's premise: 2- through 6-player games share
+    one observation and action space, so one env can serve all of them."""
     env = make_env(players=(2, 3, 4, 5, 6))
     for n in (2, 3, 4, 5, 6):
         assert env.action_space.n >= env.deck.max_legal_actions(n)  # type: ignore
 
 
 def test_learner_seat_can_be_fixed():
+    """The `learner_seat` argument is used to fix the learner's seat for
+    reproducibility, which is useful for debugging."""
     env = make_env(players=4, learner_seat=2)
     env.reset(seed=5)
     assert env.learner_seat == 2
 
 
 def test_masked_out_action_index_is_handled_defensively():
+    """The learner's own action space is always the same width, but the
+    legal count varies by turn. The env should not crash if the agent picks
+    an index that is masked out, but it should not throw away the observation
+    either - the agent may be using a custom policy that is not aware of the
+    legal count, and it is easier to debug if the env does not silently drop
+    the observation."""
     env = make_env(players=4)
     env.reset(seed=3)
     illegal_action = env.action_space.n - 1  # type: ignore
     assert env.action_masks()[illegal_action] == 0
-    obs, reward, terminated, truncated, info = env.step(illegal_action)
+    obs, _reward, _terminated, _truncated, _info = env.step(illegal_action)
     assert env.observation_space.contains(obs)
 
 
 def test_personas_differ_between_seats_within_an_episode():
+    """The last `NOISE_LEN` slots of the state vector are left empty by the
+    engine for exactly this. A policy that is deterministic given the state
+    plays the same opening from the same deal every time, which is easy to
+    read and a poor explorer. Conditioning on a latent that is constant
+    within an episode but resampled across episodes lets one set of weights
+    play a variety of opening styles."""
     env = make_env(players=5)
     env.reset(seed=11)
-    personas = env._personas[: env.num_players]
+    personas = env._personas[: env.num_players]  # pylint: disable=protected-access
     assert len({tuple(p) for p in personas}) == env.num_players
 
 
@@ -96,12 +114,16 @@ class _StubModel:
     def __init__(self, tag):
         self.tag = tag
 
-    def predict(self, obs, action_masks, deterministic=False):
+    def predict(self, _obs, action_masks, _deterministic=False):
+        """Pick the first legal action, which is deterministic but not a good policy."""
         legal = np.flatnonzero(action_masks)
         return int(legal[0]) if legal.size else 0, None
 
 
 def test_opponent_pool_falls_back_to_random_with_no_model_or_snapshots():
+    """The pool is a wrapper around a model that is used to generate opponents.
+    If no model is set, it should not crash - it should just pick a random
+    legal action."""
     pool = OpponentPool()
     pool.new_episode()
     mask = np.zeros(8, dtype=np.int8)
@@ -112,6 +134,12 @@ def test_opponent_pool_falls_back_to_random_with_no_model_or_snapshots():
 
 
 def test_opponent_pool_add_snapshot_caps_at_max_snapshots():
+    """The pool is a wrapper around a model that is used to generate opponents.
+    It keeps a small number of snapshots of the model to use as opponents, and
+    it should evict the oldest snapshot when the max is exceeded. This test
+    is about the bookkeeping of the snapshots, not the model itself, so we use
+    a stub model that is only distinguishable by its `tag` attribute, not a real
+    model."""
     pool = OpponentPool(max_snapshots=3)
     for i in range(5):
         pool.add_snapshot(_StubModel(i))
@@ -119,22 +147,32 @@ def test_opponent_pool_add_snapshot_caps_at_max_snapshots():
 
 
 def test_opponent_pool_always_uses_live_model_when_no_snapshots_exist_yet():
+    """The pool is a wrapper around a model that is used to generate opponents.
+    If no snapshots have been added yet, it should always use the live model,
+    even if the `current_prob` is set to zero. This test is about the bookkeeping
+    of the snapshots, not the model itself, so we use a stub model that is only
+    distinguishable by its `tag` attribute, not a real model."""
     pool = OpponentPool(
         current_prob=0.0
     )  # would always prefer a snapshot if any existed
     pool.model = _StubModel("live")  # type: ignore
-    pool.new_episode()
-    assert pool._active is pool.model
+    pool.new_episode()  # pylint: disable=protected-access
+    assert pool._active is pool.model  # pylint: disable=protected-access
 
 
 def test_opponent_pool_can_select_an_older_snapshot():
+    """The pool is a wrapper around a model that is used to generate opponents.
+    If snapshots have been added, it should prefer them over the live model
+    according to the `current_prob` parameter. This test is about the bookkeeping
+    of the snapshots, not the model itself, so we use a stub model that is only
+    distinguishable by its `tag` attribute, not a real model."""
     pool = OpponentPool(
         current_prob=0.0, max_snapshots=5
     )  # never prefer the live model once snapshots exist
     pool.model = _StubModel("live")  # type: ignore
     pool.add_snapshot(_StubModel("old"))
     pool.new_episode()
-    assert pool._active is pool.snapshots[0]
+    assert pool._active is pool.snapshots[0]  # pylint: disable=protected-access
 
 
 def test_add_opponent_snapshot_is_a_no_op_without_a_pool():
